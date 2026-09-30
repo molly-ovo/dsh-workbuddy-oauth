@@ -24,6 +24,7 @@ function regionView(region: 'cn' | 'global', models: readonly { id: string; name
     probeCandidates: () => [],
     probeResults: () => [],
     hiddenModels: () => [],
+    useMaximumContextWindow: () => false,
   }
 }
 

@@ -234,4 +234,29 @@ describe('control route guards', () => {
     expect(result.status).toBe(400)
     expect(refreshCredits).not.toHaveBeenCalled()
   })
+
+  it('forwards a maximum-context-window toggle with its boolean state', async () => {
+    const setMaximumContextWindow = vi.fn(async () => ({ state: 'ok' }))
+    const result = await dispatch({ ...baseDeps, setMaximumContextWindow }, createControlKey(), {
+      body: JSON.stringify({ action: 'set-maximum-context-window', enabled: true }),
+    })
+    expect(result.status).toBe(200)
+    expect(setMaximumContextWindow).toHaveBeenCalledWith(true)
+  })
+
+  it('rejects a maximum-context-window toggle with a non-boolean state', async () => {
+    const setMaximumContextWindow = vi.fn(async () => ({ state: 'ok' }))
+    const result = await dispatch({ ...baseDeps, setMaximumContextWindow }, createControlKey(), {
+      body: JSON.stringify({ action: 'set-maximum-context-window', enabled: 'true' }),
+    })
+    expect(result.status).toBe(400)
+    expect(setMaximumContextWindow).not.toHaveBeenCalled()
+  })
+
+  it('answers 404 when a route was built without the context-window handler', async () => {
+    const result = await dispatch(baseDeps, createControlKey(), {
+      body: JSON.stringify({ action: 'set-maximum-context-window', enabled: true }),
+    })
+    expect(result.status).toBe(404)
+  })
 })

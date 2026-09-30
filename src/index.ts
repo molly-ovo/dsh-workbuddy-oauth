@@ -42,6 +42,7 @@ import { WorkBuddyUpstreamClient } from './upstream.ts'
 import { credentialFromLogin, deleteCredential, displayNameOf, listCredentials, probePathFor, type WorkBuddyCredential } from './credentials.ts'
 import { setAccountDisabled } from './account-state.ts'
 import { readHiddenModels, setRegionHiddenModels } from './hidden-models.ts'
+import { readUseMaximumContextWindow, writeUseMaximumContextWindow } from './preferences.ts'
 import { LoginClient, LoginPendingError } from './oauth.ts'
 import { regionEndpoints, type WorkBuddyRegion } from './region.ts'
 import { saveAccount } from './store.ts'
@@ -372,6 +373,22 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   /**
+   * Apply the persisted maximum-context-window preference to every catalog.
+   *
+   * One flag shared across both regions (only the international roster declares
+   * a larger window, so in practice only it changes); loaded once at startup,
+   * fire-and-forget like the hidden set.
+   */
+  void readUseMaximumContextWindow().then((useMaximum) => {
+    if (!useMaximum) return
+    let changed = false
+    for (const runtime of runtimes) {
+      if (runtime.catalog.setUseMaximumContextWindow(true)) changed = true
+    }
+    if (changed) ctx.emit('llm/adapters-updated')
+  })
+
+  /**
    * Live login attempts, keyed by state.
    *
    * Held here rather than in a module global so a profile reload cannot leave a
@@ -419,7 +436,11 @@ export function apply(ctx: Context, config: Config): void {
         // `resolveModel` ambiguous and let a request resolve to a descriptor
         // built for the other region's endpoint.
         providerId: providerIdFor(region),
-        displayName: `WorkBuddy${region === 'global' ? ' AI' : ''}`,
+        // The picker groups models under this name. It must stay visibly
+        // distinct from `dsh-workbuddy-connect`'s "WorkBuddy" / "WorkBuddy AI"
+        // groups — a user with both installed compares them side by side, and a
+        // collision-free name is the only thing that tells the groups apart.
+        displayName: regionEndpoints(region).label,
         shim,
         store: runtime.store,
         catalog: runtime.catalog,
@@ -557,7 +578,11 @@ export function apply(ctx: Context, config: Config): void {
       regions: runtimes.map(runtime => ({
         region: runtime.region,
         providerId: providerIdFor(runtime.region),
-        models: () => runtime.catalog.current(),
+        // The full roster, not `current()`: the card's visibility list must
+        // still show a hidden model so its checkbox can be re-ticked. `current()`
+        // already drops hidden ids, which is exactly what makes hiding
+        // irreversible from the card — the row vanishes the moment it is hidden.
+        models: () => runtime.catalog.roster(),
         probeRunning: () => runtime.probeService.isRunning(),
         probeCandidates: () =>
           runtime.catalog.current().filter(info => runtime.probeService.isCandidate(info.id)).map(info => info.id),
@@ -567,6 +592,7 @@ export function apply(ctx: Context, config: Config): void {
             return record === undefined ? [] : [{ id: info.id, record }]
           }),
         hiddenModels: () => runtime.catalog.hiddenModelIds(),
+        useMaximumContextWindow: () => runtime.catalog.isUsingMaximumContextWindow(),
       })),
       controlKey,
     })
@@ -679,6 +705,22 @@ export function apply(ctx: Context, config: Config): void {
           await setRegionHiddenModels(runtime.region, [...next])
           if (changed) runtime.invalidate()
           return { state: 'ok', reason: visible ? 'visible' : 'hidden' }
+        },
+        /**
+         * The card's counterpart to the maximum-context-window preference.
+         *
+         * One flag shared across regions; the host owns the catalog flag and the
+         * persistence, so the picker and the checkbox cannot disagree. Invalidates
+         * the adapter only when the flag actually changed.
+         */
+        setMaximumContextWindow: async (enabled) => {
+          await writeUseMaximumContextWindow(enabled)
+          let changed = false
+          for (const region of runtimes) {
+            if (region.catalog.setUseMaximumContextWindow(enabled)) changed = true
+          }
+          if (changed) ctx.emit('llm/adapters-updated')
+          return { state: 'ok', reason: enabled ? 'maximum' : 'default' }
         },
         /**
          * The card's counterpart to P5.1: fetch one account's balance.

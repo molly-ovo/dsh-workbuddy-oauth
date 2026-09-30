@@ -118,18 +118,40 @@ export class WorkBuddyCatalog {
 
   constructor(initial: readonly WorkBuddyModelInfo[] = FALLBACK_WORKBUDDY_MODELS) { this.models = initial }
 
-  /** Current entries; empty while the variant has no usable credential. */
+  /**
+   * Current selectable entries; empty while the variant has no usable
+   * credential. Hidden ids are dropped, so this is what the adapter and the
+   * model picker read.
+   */
   current(): readonly WorkBuddyModelInfo[] {
     if (!this.visible) return []
-    return this.models
-      .filter(model => !this.hiddenModels.has(model.id))
-      .map(model => {
-        const current = modelWithCurrentPromotion(model)
-        const maximum = current.supportedContextWindows === undefined ? undefined : Math.max(...current.supportedContextWindows)
-        return this.useMaximumContextWindow && maximum !== undefined && maximum > current.contextWindow
-          ? { ...current, defaultContextWindow: current.defaultContextWindow ?? current.contextWindow, contextWindow: maximum }
-          : current
-      })
+    return this.roster().filter(model => !this.hiddenModels.has(model.id))
+  }
+
+  /**
+   * The full roster, without the hidden filter.
+   *
+   * Distinct from {@link current} so the settings card can render *every* model
+   * — including the ones the user hid — with its checkbox un-ticked. Hiding a
+   * model is only reversible if the card can still see the hidden row to
+   * un-check it, and a roster already filtered down to the visible ids leaves
+   * nothing to click. The adapter and picker keep reading `current()`; only the
+   * card's visibility list uses this wider view.
+   *
+   * Empty while the variant has no usable credential, exactly like `current()`.
+   */
+  roster(): readonly WorkBuddyModelInfo[] {
+    if (!this.visible) return []
+    return this.models.map(model => this.display(model))
+  }
+
+  /** One entry with promotion and context-window selection applied, for display. */
+  private display(model: WorkBuddyModelInfo): WorkBuddyModelInfo {
+    const current = modelWithCurrentPromotion(model)
+    const maximum = current.supportedContextWindows === undefined ? undefined : Math.max(...current.supportedContextWindows)
+    return this.useMaximumContextWindow && maximum !== undefined && maximum > current.contextWindow
+      ? { ...current, defaultContextWindow: current.defaultContextWindow ?? current.contextWindow, contextWindow: maximum }
+      : current
   }
 
   /** Replace the list; callers invalidate their adapter snapshot after this. */
@@ -150,6 +172,11 @@ export class WorkBuddyCatalog {
     if (this.visible === visible) return false
     this.visible = visible
     return true
+  }
+
+  /** Whether the largest declared window is selected (see {@link setUseMaximumContextWindow}). */
+  isUsingMaximumContextWindow(): boolean {
+    return this.useMaximumContextWindow
   }
 
   /** Select the largest declared international window where the upstream offers one. */

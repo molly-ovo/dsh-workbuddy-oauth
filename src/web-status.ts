@@ -72,6 +72,13 @@ export interface WorkBuddyRegionView {
    * and the card must reflect the current toggle state on each read.
    */
   hiddenModels: () => readonly string[]
+  /**
+   * Whether the user chose the largest declared context window for this region.
+   *
+   * A function rather than a frozen value so the card reflects the current
+   * flag on each read, exactly like {@link hiddenModels}.
+   */
+  useMaximumContextWindow: () => boolean
 }
 
 /** Constructor dependencies for {@link workBuddyWebStatus}. */
@@ -127,6 +134,7 @@ function regionView(
     signedIn,
     models: modelViews(models),
     hiddenModels: [...view.hiddenModels()],
+    useMaximumContextWindow: view.useMaximumContextWindow(),
     probeRunning: view.probeRunning(),
     probeCandidates: [...view.probeCandidates()],
     // Newest first: a detection the user just ran belongs at the top, not

@@ -14,6 +14,7 @@ import {
   WORKBUDDY_STATUS_PATH,
   WORKBUDDY_CONTROL_KEY_HEADER,
   type WorkBuddyControlResult,
+  type WorkBuddyCredits,
   type WorkBuddyWebRegion,
   type WorkBuddyWebStatus,
 } from '../status-paths.ts'
@@ -61,6 +62,7 @@ export type ControlRequest =
   | { action: 'logout'; uid: string }
   | { action: 'set-account-enabled'; uid: string; enabled: boolean }
   | { action: 'set-model-visible'; region: string; modelId: string; visible: boolean }
+  | { action: 'set-maximum-context-window'; enabled: boolean }
   | { action: 'refresh-credits'; uid: string }
 
 /**
@@ -92,10 +94,23 @@ export async function sendControl(
       ...typeof wrapped['reason'] === 'string' ? { reason: wrapped['reason'] } : {},
       ...typeof wrapped['url'] === 'string' ? { url: wrapped['url'] } : {},
       ...typeof wrapped['loginState'] === 'string' ? { loginState: wrapped['loginState'] } : {},
+      // Credits ride on the refresh-credits answer; a hand-maintained field list
+      // is exactly how this answer lost them the first time (the card showed
+      // "查询失败: credits" for a request that had succeeded). The structural
+      // check below is the contract, not a field list to extend by hand.
+      ...isCreditsShape(wrapped['credits']) ? { credits: wrapped['credits'] } : {},
     }
   } catch {
     return undefined
   }
+}
+
+/** Whether a value is a usable credit answer (total plus its package list). */
+function isCreditsShape(value: unknown): value is WorkBuddyCredits {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as Partial<WorkBuddyCredits>
+  if (typeof candidate['total'] !== 'number' || !Number.isFinite(candidate['total'])) return false
+  return Array.isArray(candidate['accounts'])
 }
 
 /** Find the region a provider id belongs to, or `undefined` for another plugin's model. */

@@ -47,6 +47,7 @@ export type WorkBuddyControlAction =
   | { action: 'logout'; uid: string }
   | { action: 'set-account-enabled'; uid: string; enabled: boolean }
   | { action: 'set-model-visible'; region: string; modelId: string; visible: boolean }
+  | { action: 'set-maximum-context-window'; enabled: boolean }
   | { action: 'refresh-credits'; uid: string }
 
 /** Constructor dependencies. */
@@ -95,6 +96,14 @@ export interface WorkBuddyControlRouteOptions {
    * disagree about what is hidden.
    */
   setModelVisible?: (region: string, modelId: string, visible: boolean) => Promise<WorkBuddyControlResult>
+  /**
+   * Select or clear the largest-declared-context-window preference.
+   *
+   * The card's counterpart to the catalog's `setUseMaximumContextWindow`; the
+   * host owns the persistence and the catalog flag, so the picker and the
+   * checkbox cannot disagree.
+   */
+  setMaximumContextWindow?: (enabled: boolean) => Promise<WorkBuddyControlResult>
   /**
    * Fetch one account's credit balance.
    *
@@ -195,6 +204,11 @@ function parseAction(text: string): WorkBuddyControlAction | undefined {
     if (typeof visible !== 'boolean') return undefined
     return { action: 'set-model-visible', region, modelId: modelId.trim(), visible }
   }
+  if (action === 'set-maximum-context-window') {
+    const enabled = wrapped['enabled']
+    if (typeof enabled !== 'boolean') return undefined
+    return { action: 'set-maximum-context-window', enabled }
+  }
   if (action === 'refresh-credits') {
     const uid = wrapped['uid']
     if (typeof uid !== 'string' || uid.trim() === '') return undefined
@@ -286,6 +300,14 @@ export function workBuddyControlHandler(
           return
         }
         json(res, 200, await deps.setModelVisible(action.region, action.modelId, action.visible))
+        return
+      }
+      if (action.action === 'set-maximum-context-window') {
+        if (deps.setMaximumContextWindow === undefined) {
+          json(res, 404, { error: 'context-window-not-supported' })
+          return
+        }
+        json(res, 200, await deps.setMaximumContextWindow(action.enabled))
         return
       }
       if (action.action === 'refresh-credits') {

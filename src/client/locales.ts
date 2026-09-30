@@ -30,21 +30,22 @@ export type WorkBuddyLocaleKey =
   | 'login'
   | 'loginStarting'
   | 'loginOpenLink'
-  | 'loginWaiting'
-  | 'loginRetry'
-  | 'loginConfirm'
-  | 'loginChecking'
-  | 'loginConfirmHint'
+  | 'loginRefreshHint'
   | 'loginSucceeded'
   | 'loginFailed'
   | 'loginState'
   | 'noAccounts'
   | 'accountCount'
   | 'signedInWithModels'
+  | 'tabAccounts'
+  | 'tabModels'
   | 'modelsHeading'
   | 'contextWindowLabel'
   | 'hideModel'
   | 'modelVisibilityIntro'
+  | 'useMaximumContextWindow'
+  | 'expand'
+  | 'collapse'
   | 'creditsHeading'
   | 'queryCredits'
   | 'creditsLoading'
@@ -93,21 +94,22 @@ export const zh: Record<WorkBuddyLocaleKey, string> = {
   login: '登录',
   loginStarting: '正在获取授权链接…',
   loginOpenLink: '请在浏览器中打开以下链接完成授权：',
-  loginWaiting: '已打开链接。在浏览器里完成登录后，点右侧按钮确认。',
-  loginRetry: '重新获取链接',
-  loginConfirm: '我已完成登录',
-  loginChecking: '正在确认…',
-  loginConfirmHint: '若点击后仍显示未登录，请确认浏览器里已看到登录成功，再点一次或重新获取链接。',
+  loginRefreshHint: '若已在网页成功登录，点「刷新」完成登录。',
   loginSucceeded: '登录成功：{label}',
   loginFailed: '登录失败：{reason}',
   loginState: '登录状态',
   noAccounts: '尚未登录任何账号',
   accountCount: '已登录 {count} 个账号',
   signedInWithModels: '已登录 · {count} 个模型',
+  tabAccounts: '账号',
+  tabModels: '模型',
   modelsHeading: '模型',
   contextWindowLabel: '上下文',
   hideModel: '隐藏',
   modelVisibilityIntro: '取消勾选可把模型从选择器隐藏；正在使用该模型的对话不受影响。',
+  useMaximumContextWindow: '使用上游声明的最大上下文窗口',
+  expand: '展开',
+  collapse: '收起',
   creditsHeading: '积分余额',
   queryCredits: '查询余额',
   creditsLoading: '查询中…',
@@ -157,21 +159,22 @@ export const en: Record<WorkBuddyLocaleKey, string> = {
   login: 'Sign in',
   loginStarting: 'Requesting an authorization link…',
   loginOpenLink: 'Open this link in your browser to authorize:',
-  loginWaiting: 'Link opened. After signing in there, press the button to confirm.',
-  loginRetry: 'Get a new link',
-  loginConfirm: 'I have signed in',
-  loginChecking: 'Checking…',
-  loginConfirmHint: 'If it still shows as signed out, make sure the browser showed success, then press again or request a new link.',
+  loginRefreshHint: 'If you already signed in, press "Refresh" to finish.',
   loginSucceeded: 'Signed in: {label}',
   loginFailed: 'Sign-in failed: {reason}',
   loginState: 'Sign-in state',
   noAccounts: 'No account signed in',
   accountCount: '{count} account(s) signed in',
   signedInWithModels: 'Signed in · {count} models',
+  tabAccounts: 'Accounts',
+  tabModels: 'Models',
   modelsHeading: 'Models',
   contextWindowLabel: 'Context',
   hideModel: 'Hide',
   modelVisibilityIntro: 'Uncheck a model to hide it from the picker; chats already using it keep working.',
+  useMaximumContextWindow: 'Use the largest declared context window',
+  expand: 'Expand',
+  collapse: 'Collapse',
   creditsHeading: 'Credit balance',
   queryCredits: 'Check balance',
   creditsLoading: 'Checking…',

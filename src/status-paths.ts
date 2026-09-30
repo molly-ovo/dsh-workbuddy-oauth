@@ -18,6 +18,8 @@ import type { WorkBuddyRegion } from './region.ts'
 import type { WorkBuddyCredits, WorkBuddyEffort } from './upstream.ts'
 import type { WorkBuddyProbeValidation } from './probe-store.ts'
 
+export type { WorkBuddyCredits } from './upstream.ts'
+
 /** Read-only status endpoint consumed by this plugin's browser half. */
 export const WORKBUDDY_STATUS_PATH = '/plugins/dsh-workbuddy-standalone/status'
 
@@ -134,6 +136,15 @@ export interface WorkBuddyWebRegion {
    * card only needs the ids to know which boxes to tick.
    */
   hiddenModels: readonly string[]
+  /**
+   * Whether the user chose the largest declared context window for this region.
+   *
+   * Carried so the card can render the checkbox state without holding a second
+   * copy of the rule. Only the international region declares
+   * `supportedContextWindows`, so this is meaningful there; the CN region still
+   * reports the same global flag for a uniform card layout.
+   */
+  useMaximumContextWindow: boolean
   /** Whether a probe sweep is in flight for this region right now. */
   probeRunning: boolean
   /**

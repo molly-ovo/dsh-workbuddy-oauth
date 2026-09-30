@@ -48,6 +48,68 @@ const introStyle: CSSProperties = {
 }
 const rowStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }
 const regionStyle: CSSProperties = { fontSize: 12, color: 'var(--dsw-alias-label-primary)' }
+/** The region group title, one step larger than the body text it labels. */
+const regionTitleStyle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 600,
+  color: 'var(--dsw-alias-label-primary)',
+}
+/** The region row header: a full-width toggle for the model list it opens. */
+const regionHeaderStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+  padding: 0,
+  border: 0,
+  background: 'transparent',
+  color: 'inherit',
+  font: 'inherit',
+  textAlign: 'left',
+}
+/** The "expand / collapse" affordance on the region row; a word, not a glyph. */
+const toggleStyle: CSSProperties = {
+  flex: '0 0 auto',
+  fontSize: 12,
+  lineHeight: 1,
+  color: 'var(--dsw-alias-label-tertiary)',
+}
+/**
+ * The model list as a responsive grid rather than one long column: 24 rows in a
+ * wide card is a wall of checkboxes with most of the width empty. Cells are
+ * ~200px minimum so a narrow card falls back to one column and a wide one wraps
+ * into two or three, without any JS measuring.
+ */
+const modelGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+  gap: '2px 16px',
+  alignItems: 'center',
+}
+/** One grid cell: checkbox, then name, then a right-aligned window figure. */
+const modelRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  minWidth: 0,
+}
+/** The per-model context window, right-aligned so the figures form a column. */
+const contextStyle: CSSProperties = {
+  flex: '0 0 auto',
+  fontSize: 12,
+  color: 'var(--dsw-alias-label-tertiary)',
+  fontVariantNumeric: 'tabular-nums',
+}
+/**
+ * The maximum-window toggle: label first, control last, flush left with the
+ * group titles above the model grid. No explanatory copy — the label names the
+ * behaviour, and the host applies it only where a larger window exists.
+ */
+const maxWindowRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+}
 const mutedStyle: CSSProperties = { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' }
 /** Success state, so "signed in" reads differently from a neutral label. */
 const signedInStyle: CSSProperties = { fontSize: 12, color: 'var(--dsw-alias-state-success-primary)' }
@@ -83,6 +145,26 @@ const noticeStyle: CSSProperties = {
 // so the link colour depended on a hard-coded fallback instead of the theme.
 const linkStyle: CSSProperties = { color: 'var(--dsw-alias-brand-primary)', fontSize: 12 }
 
+/** The tab bar row. */
+const tabBarStyle: CSSProperties = { display: 'flex', gap: 4, borderBottom: '1px solid var(--dsw-alias-border-l2)' }
+/** One tab; the active one reads as selected rather than a plain button. */
+const tabStyle: CSSProperties = {
+  padding: '4px 12px',
+  border: 0,
+  borderBottom: '2px solid transparent',
+  background: 'transparent',
+  color: 'var(--dsw-alias-label-secondary)',
+  font: 'inherit',
+  fontSize: 12,
+  cursor: 'pointer',
+}
+const tabActiveStyle: CSSProperties = {
+  ...tabStyle,
+  borderBottom: '2px solid var(--dsw-alias-brand-primary)',
+  color: 'var(--dsw-alias-label-primary)',
+  fontWeight: 600,
+}
+
 /** One in-flight sign-in the card is waiting on. */
 interface PendingLogin {
   /** Attempt id handed back to `login-complete`. */
@@ -96,9 +178,6 @@ interface PendingLogin {
 /** How often the card re-checks the status document. */
 const RECONCILE_MS = 30_000
 
-/** How often a waiting sign-in asks the host whether the upstream confirmed. */
-const LOGIN_POLL_MS = 3_000
-
 /**
  * Render the bundle's configuration.
  *
@@ -110,14 +189,14 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
   const [pending, setPending] = useState<PendingLogin>()
   const [notice, setNotice] = useState<string>()
   const [busy, setBusy] = useState(false)
-  const [checking, setChecking] = useState(false)
+  const [tab, setTab] = useState<'accounts' | 'models'>('accounts')
   const [credits, setCredits] = useState<Record<string, WorkBuddyCredits>>({})
   const [creditsBusy, setCreditsBusy] = useState<ReadonlySet<string>>(new Set())
   const mounted = useRef(false)
   /**
-   * Guards the completion call so the button and the polling loop cannot both be
-   * in flight: redeeming the same state twice would race, and the loser can only
-   * report a failure for a sign-in that actually succeeded.
+   * Guards the completion call so two overlapping redeems cannot race: redeeming
+   * the same state twice would race, and the loser can only report a failure for
+   * a sign-in that actually succeeded.
    */
   const completing = useRef(false)
 
@@ -139,17 +218,17 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
   }, [refresh])
 
   /**
-   * Ask the host whether the upstream accepted the authorization.
+   * Redeem an outstanding authorization.
    *
    * The upstream does not report the browser approval to us; the host finds out
    * by redeeming the state, so this is a question, and `pending` is a normal
-   * in-between answer rather than an error. Both the button and the polling loop
-   * call it, and `completing` keeps them from overlapping.
+   * in-between answer rather than an error. There is no dedicated "confirm"
+   * button — the card's Refresh re-reads status and completes any outstanding
+   * login, which is the single affordance the user needs.
    */
-  const checkLogin = useCallback(async (state: string): Promise<void> => {
+  const completeLogin = useCallback(async (state: string): Promise<void> => {
     if (status === undefined || completing.current) return
     completing.current = true
-    if (mounted.current) setChecking(true)
     try {
       const result = await sendControl(status.regions[0]?.controlPath ?? '', status.controlKey, {
         action: 'login-complete',
@@ -171,26 +250,12 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
         setPending(undefined)
         setNotice(t('loginFailed', { reason: result.reason ?? '' }))
       }
-      // `pending` keeps waiting: the user may not have finished in the browser.
+      // `pending` keeps the link + hint so the user can refresh again once the
+      // browser is finished.
     } finally {
       completing.current = false
-      if (mounted.current) setChecking(false)
     }
   }, [status, t, refresh])
-
-  /**
-   * Keep asking while a sign-in is outstanding.
-   *
-   * The explicit confirm button is the primary affordance, but polling means the
-   * card also settles on its own if the user closes the browser tab and comes
-   * back — a stuck "waiting" state would be worse than a redundant request.
-   */
-  useEffect(() => {
-    if (pending === undefined || status === undefined) return
-    const timer = window.setInterval(() => { void checkLogin(pending.state) }, LOGIN_POLL_MS)
-    void checkLogin(pending.state)
-    return () => { window.clearInterval(timer) }
-  }, [pending, status, checkLogin])
 
   const startLogin = async (region: string): Promise<void> => {
     if (status === undefined || busy) return
@@ -209,6 +274,17 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
     } finally {
       if (mounted.current) setBusy(false)
     }
+  }
+
+  /**
+   * The card's Refresh: complete any outstanding login, then re-read the
+   * document. Completing first is what lets Refresh substitute for the removed
+   * "confirm" button — after the user authorizes in the browser, Refresh redeems
+   * the state and shows the new account in one gesture.
+   */
+  const onRefresh = async (): Promise<void> => {
+    if (pending !== undefined) await completeLogin(pending.state)
+    await refresh()
   }
 
   /**
@@ -284,8 +360,24 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
       modelId,
       visible,
     })
-    // Whether the host accepted or not, re-read so the checkbox reflects the
-    // persisted truth rather than a local guess.
+    await refresh()
+    if (result === undefined || result.state !== 'ok') {
+      setNotice(t('loginFailed', { reason: result?.reason ?? t('working') }))
+    }
+  }
+
+  /**
+   * Select or clear the maximum-context-window preference.
+   *
+   * One flag shared across regions; the host owns the catalog flag and the
+   * persistence, so the checkbox and the picker cannot disagree.
+   */
+  const toggleMaxWindow = async (enabled: boolean): Promise<void> => {
+    if (status === undefined) return
+    const result = await sendControl(status.regions[0]?.controlPath ?? '', status.controlKey, {
+      action: 'set-maximum-context-window',
+      enabled,
+    })
     await refresh()
     if (result === undefined || result.state !== 'ok') {
       setNotice(t('loginFailed', { reason: result?.reason ?? t('working') }))
@@ -294,38 +386,12 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
 
   if (view === 'summary') return t('intro')
 
+  const maxWindow = status?.regions[0]?.useMaximumContextWindow === true
+
   return (
     <section style={sectionStyle}>
       <span style={titleStyle}>{t('title')}</span>
       <span style={introStyle}>{t('intro')}</span>
-
-      {notice === undefined ? null : (
-        <span role="status" aria-live="polite" style={noticeStyle}>{notice}</span>
-      )}
-
-      {pending === undefined ? null : (
-        <span style={noticeStyle}>
-          <span>
-            {t('loginOpenLink')}
-            {' '}
-            <a href={pending.url} target="_blank" rel="noreferrer" style={linkStyle}>{pending.url}</a>
-            {' '}
-            {t('loginWaiting')}
-          </span>
-          <button
-            type="button"
-            style={primaryButtonStyle}
-            disabled={checking}
-            onClick={() => { void checkLogin(pending.state) }}
-          >
-            {checking ? t('loginChecking') : t('loginConfirm')}
-          </button>
-          <button type="button" style={buttonStyle} onClick={() => { setPending(undefined) }}>
-            {t('cancel')}
-          </button>
-          <span style={{ ...mutedStyle, flexBasis: '100%' }}>{t('loginConfirmHint')}</span>
-        </span>
-      )}
 
       <div style={rowStyle}>
         <button
@@ -348,56 +414,102 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
           type="button"
           style={buttonStyle}
           disabled={status === undefined}
-          onClick={() => { void refresh() }}
+          onClick={() => { void onRefresh() }}
         >
           {t('refresh')}
         </button>
       </div>
 
+      {pending === undefined ? null : (
+        <span style={noticeStyle}>
+          <span>
+            {t('loginOpenLink')}
+            {' '}
+            <a href={pending.url} target="_blank" rel="noreferrer" style={linkStyle}>{pending.url}</a>
+            {' '}
+            {t('loginRefreshHint')}
+          </span>
+          <button type="button" style={buttonStyle} onClick={() => { setPending(undefined) }}>
+            {t('cancel')}
+          </button>
+        </span>
+      )}
+
+      {notice === undefined ? null : (
+        <span role="status" aria-live="polite" style={noticeStyle}>{notice}</span>
+      )}
+
       {status === undefined ? null : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {/*
-            The sign-in state is the first thing the card has to answer, so it
-            gets its own line rather than being inferred from a model count.
-          */}
-          <div style={rowStyle}>
-            <span style={regionStyle}>{t('loginState')}</span>
-            <span style={status.accounts.length === 0 ? mutedStyle : signedInStyle}>
-              {status.accounts.length === 0
-                ? t('noAccounts')
-                : t('accountCount', { count: status.accounts.length })}
-            </span>
+        <>
+          <div role="tablist" style={tabBarStyle}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'accounts'}
+              style={tab === 'accounts' ? tabActiveStyle : tabStyle}
+              onClick={() => { setTab('accounts') }}
+            >
+              {t('tabAccounts')}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'models'}
+              style={tab === 'models' ? tabActiveStyle : tabStyle}
+              onClick={() => { setTab('models') }}
+            >
+              {t('tabModels')}
+            </button>
           </div>
-          {status.regions.map(region => (
-            <RegionBlock
-              key={region.region}
-              region={region}
-              t={t}
-              onToggleModel={(modelId, visible) => toggleModel(region, modelId, visible)}
-            />
-          ))}
-          {/*
-            One row per account, with the uid prefix visible: signing out or
-            disabling names an account by uid, so the card has to show it to be
-            usable at all.
-          */}
-          {status.accounts.map(account => (
-            <AccountRow
-              key={account.uid}
-              account={account}
-              t={t}
-              busy={busy}
-              credits={credits[account.uid]}
-              creditsBusy={creditsBusy.has(account.uid)}
-              onQueryCredits={() => queryCredits(account.uid)}
-              onToggle={(enabled) => runAccountAction(
-                { action: 'set-account-enabled', uid: account.uid, enabled },
-                account.label,
-              )}
-              onLogout={() => runAccountAction({ action: 'logout', uid: account.uid }, account.label)}
-            />
-          ))}
-        </div>
+
+          {tab === 'accounts' ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={rowStyle}>
+                <span style={regionStyle}>{t('loginState')}</span>
+                <span style={status.accounts.length === 0 ? mutedStyle : signedInStyle}>
+                  {status.accounts.length === 0
+                    ? t('noAccounts')
+                    : t('accountCount', { count: status.accounts.length })}
+                </span>
+              </div>
+              {status.accounts.map(account => (
+                <AccountRow
+                  key={account.uid}
+                  account={account}
+                  t={t}
+                  busy={busy}
+                  credits={credits[account.uid]}
+                  creditsBusy={creditsBusy.has(account.uid)}
+                  onQueryCredits={() => queryCredits(account.uid)}
+                  onToggle={(enabled) => runAccountAction(
+                    { action: 'set-account-enabled', uid: account.uid, enabled },
+                    account.label,
+                  )}
+                  onLogout={() => runAccountAction({ action: 'logout', uid: account.uid }, account.label)}
+                />
+              ))}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <label style={maxWindowRowStyle}>
+                <span style={regionStyle}>{t('useMaximumContextWindow')}</span>
+                <input
+                  type="checkbox"
+                  checked={maxWindow}
+                  onChange={() => { void toggleMaxWindow(!maxWindow) }}
+                />
+              </label>
+              {status.regions.map(region => (
+                <RegionBlock
+                  key={region.region}
+                  region={region}
+                  t={t}
+                  onToggleModel={(modelId, visible) => toggleModel(region, modelId, visible)}
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </section>
   )
@@ -417,32 +529,50 @@ function RegionBlock({ region, t, onToggleModel }: {
   onToggleModel: (modelId: string, visible: boolean) => void
 }): ReactNode {
   const hidden = new Set(region.hiddenModels)
+  const [expanded, setExpanded] = useState(false)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <div style={rowStyle}>
-        <span style={regionStyle}>{region.label}</span>
-        <span style={region.signedIn ? signedInStyle : mutedStyle}>
-          {region.signedIn
-            ? t('signedInWithModels', { count: region.models.length })
-            : t('signedOut')}
+      <button
+        type="button"
+        style={{ ...regionHeaderStyle, cursor: region.models.length === 0 ? 'default' : 'pointer' }}
+        aria-expanded={region.models.length === 0 ? undefined : expanded}
+        disabled={region.models.length === 0}
+        onClick={() => { setExpanded(value => !value) }}
+      >
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <span style={regionTitleStyle}>{region.label}</span>
         </span>
-      </div>
-      {region.models.length === 0 ? null : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingLeft: 12 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 14, marginLeft: 'auto', flex: '0 0 auto' }}>
+          <span style={region.signedIn ? signedInStyle : mutedStyle}>
+            {region.signedIn
+              ? t('signedInWithModels', { count: region.models.length })
+              : t('signedOut')}
+          </span>
+          {region.models.length === 0 ? null : (
+            <span aria-hidden="true" style={toggleStyle}>
+              {expanded ? t('collapse') : t('expand')}
+            </span>
+          )}
+        </span>
+      </button>
+      {!expanded || region.models.length === 0 ? null : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span style={mutedStyle}>{t('modelVisibilityIntro')}</span>
-          {region.models.map(model => (
-            <label key={model.id} style={{ ...rowStyle, gap: 6 }}>
-              <input
-                type="checkbox"
-                checked={!hidden.has(model.id)}
-                onChange={() => onToggleModel(model.id, hidden.has(model.id))}
-              />
-              <span style={regionStyle}>{model.name}</span>
-              <span style={mutedStyle}>
-                {t('contextWindowLabel')} {formatContext(model.contextWindow)}
-              </span>
-            </label>
-          ))}
+          <div style={modelGridStyle}>
+            {region.models.map(model => (
+              <label key={model.id} style={modelRowStyle}>
+                <input
+                  type="checkbox"
+                  checked={!hidden.has(model.id)}
+                  onChange={() => onToggleModel(model.id, hidden.has(model.id))}
+                />
+                <span style={{ ...regionStyle, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {model.name}
+                </span>
+                <span style={contextStyle}>{formatContext(model.contextWindow)}</span>
+              </label>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -482,6 +612,9 @@ function AccountRow({ account, t, busy, credits, creditsBusy, onQueryCredits, on
     <div style={{ ...rowStyle, flexWrap: 'wrap' }}>
       <span style={regionStyle}>{account.label}</span>
       <span style={mutedStyle}>{account.uid.slice(0, 8)}</span>
+      {credits !== undefined ? (
+        <span style={mutedStyle}>{renderCredits(credits, t)}</span>
+      ) : null}
       <span style={mutedStyle}>{t(account.enabled ? 'enabledTag' : 'disabledTag')}</span>
       <span style={{ flex: 1 }} />
       <button
@@ -519,34 +652,15 @@ function AccountRow({ account, t, busy, credits, creditsBusy, onQueryCredits, on
           {t('logoutConfirm', { label: account.label })}
         </span>
       ) : null}
-      {credits !== undefined ? (
-        <span style={{ ...mutedStyle, flexBasis: '100%' }}>
-          {renderCredits(credits, t)}
-        </span>
-      ) : null}
     </div>
   )
 }
 
-/** One line summarising a balance: total, then each package's remaining share. */
-function renderCredits(credits: WorkBuddyCredits, t: WorkBuddyConfigPageProps['t']): ReactNode {
-  const total = credits.unlimited === true
+/** The account's total balance, shown inline beside its uid. */
+function renderCredits(credits: WorkBuddyCredits, t: WorkBuddyConfigPageProps['t']): string {
+  return credits.unlimited === true
     ? t('creditsUnlimited')
     : t('creditsTotal', { total: credits.total })
-  const packages = credits.accounts.map(account => {
-    if (account.unlimited === true) return `${account.packageName}: ${t('creditsUnlimited')}`
-    if (account.size === 0) return `${account.packageName}: ${t('creditsUnknownSize', { remain: account.remain })}`
-    return `${account.packageName}: ${account.remain}/${account.size}`
-  })
-  const reset = credits.cycleResetTime === undefined ? null : t('creditsReset', { time: credits.cycleResetTime })
-  return (
-    <>
-      <span style={regionStyle}>{t('creditsHeading')}</span>
-      <span>{total}</span>
-      {packages.length > 0 ? <span style={mutedStyle}>{packages.join(' · ')}</span> : null}
-      {reset === null ? null : <span style={mutedStyle}>{reset}</span>}
-    </>
-  )
 }
 
 /** Re-exported so the entry can declare the namespace it registers. */

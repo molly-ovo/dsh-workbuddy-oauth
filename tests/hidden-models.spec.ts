@@ -87,4 +87,34 @@ describe('WorkBuddyCatalog hidden filtering', () => {
     // has rows to describe; the hidden set governs only the picker roster.
     expect(catalog.fallback().length).toBe(FALLBACK_WORKBUDDY_MODELS.length)
   })
+
+  it('keeps hidden ids in roster() so the card can un-hide them', () => {
+    // Regression: hiding a model dropped it from `current()`, which was also the
+    // list the card rendered — so the row vanished the moment it was hidden and
+    // there was nothing left to un-check. `roster()` is the wider view the card
+    // reads: every model stays listed, only the checkbox state changes.
+    const catalog = new WorkBuddyCatalog(FALLBACK_WORKBUDDY_MODELS)
+    const [first, second] = FALLBACK_WORKBUDDY_MODELS
+    catalog.setHiddenModels(new Set([first!.id, second!.id]))
+    expect(catalog.current().map(model => model.id)).not.toContain(first!.id)
+    expect(catalog.roster().map(model => model.id)).toContain(first!.id)
+    expect(catalog.roster().map(model => model.id)).toContain(second!.id)
+    expect(catalog.roster().length).toBe(FALLBACK_WORKBUDDY_MODELS.length)
+  })
+
+  it('roster() is empty while the catalog is hidden, like current()', () => {
+    const catalog = new WorkBuddyCatalog(FALLBACK_WORKBUDDY_MODELS)
+    catalog.setVisible(false)
+    expect(catalog.roster()).toEqual([])
+    expect(catalog.current()).toEqual([])
+  })
+
+  it('reports the maximum-context-window flag through its getter', () => {
+    const catalog = new WorkBuddyCatalog(FALLBACK_WORKBUDDY_MODELS)
+    expect(catalog.isUsingMaximumContextWindow()).toBe(false)
+    expect(catalog.setUseMaximumContextWindow(true)).toBe(true)
+    expect(catalog.isUsingMaximumContextWindow()).toBe(true)
+    // A no-op toggle reports false so the caller can skip invalidation.
+    expect(catalog.setUseMaximumContextWindow(true)).toBe(false)
+  })
 })
