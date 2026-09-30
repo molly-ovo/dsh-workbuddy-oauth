@@ -18,6 +18,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { resolveAppVersion, validVersion } from './identity.ts'
 import { regionEndpoints, type WorkBuddyRegion } from './region.ts'
 
 /** User agent the login endpoints expect. Do not substitute the plugin's own. */
@@ -36,9 +37,6 @@ export const LOGIN_USER_AGENT = 'CLI/2.63.2 CodeBuddy/2.63.2'
  */
 export const AUTH_PLATFORM = 'workbuddy'
 
-/** Desktop-app version the authorization URL advertises, matching the app. */
-const AUTH_URL_VERSION = '5.5.6'
-
 /**
  * Add the two query parameters the desktop app's authorization URL carries.
  *
@@ -55,11 +53,18 @@ const AUTH_URL_VERSION = '5.5.6'
  * that opens is strictly better than a hard failure, and the upstream is the
  * authority on what it issued.
  *
+ * **`version` is a shape requirement, not a currency claim.** Measured: the page
+ * returns byte-identical HTML for `0.0.1`, `5.5.6` and `99.0.0`, so there is
+ * nothing to gain from fetching "the latest version" — it only has to be present
+ * and well formed. Its value comes from the plugin's own app-version identity, so
+ * a configured `appVersion` governs the sign-in URL too instead of a second
+ * constant drifting away from it.
+ *
  * @param authUrl - the URL the state endpoint returned.
- * @param region - selects the advertised app version.
+ * @param version - the desktop-app version to advertise; see {@link resolveAppVersion}.
  * @returns the URL with `version` and `loginSessionId` present.
  */
-export function officialAuthUrl(authUrl: string, region: WorkBuddyRegion): string {
+export function officialAuthUrl(authUrl: string, version: string): string {
   let parsed: URL
   try {
     parsed = new URL(authUrl)
@@ -69,7 +74,7 @@ export function officialAuthUrl(authUrl: string, region: WorkBuddyRegion): strin
   // Only fill them in when absent, so a future upstream that starts returning
   // them keeps its own values.
   if (!parsed.searchParams.has('version')) {
-    parsed.searchParams.set('version', region === 'global' ? '5.5.2' : AUTH_URL_VERSION)
+    parsed.searchParams.set('version', version)
   }
   if (!parsed.searchParams.has('loginSessionId')) {
     parsed.searchParams.set('loginSessionId', randomUUID())
@@ -185,6 +190,16 @@ export interface LoginClientOptions {
   minPollIntervalMs?: number
   /** Override the state lifetime. */
   loginTtlMs?: number
+  /**
+   * Desktop-app version advertised in the authorization URL.
+   *
+   * Optional and validated like every other outbound version: the value reaches
+   * a URL query string, so a malformed one is rejected rather than sent. Absent
+   * falls back to the region's {@link resolveAppVersion} default, which the
+   * plugin's own `appVersion` config can already override — so the sign-in URL
+   * and the outbound identity never claim different versions.
+   */
+  appVersion?: string
 }
 
 /** A live sign-in attempt. */
@@ -208,6 +223,7 @@ export class LoginClient {
   private readonly now: () => number
   private readonly minPollIntervalMs: number
   private readonly loginTtlMs: number
+  private readonly appVersion: string | undefined
 
   /**
    * Live attempts, keyed by state.
@@ -226,6 +242,14 @@ export class LoginClient {
     this.now = options.now ?? (() => Date.now())
     this.minPollIntervalMs = options.minPollIntervalMs ?? MIN_POLL_INTERVAL_MS
     this.loginTtlMs = options.loginTtlMs ?? LOGIN_TTL_MS
+    if (options.appVersion !== undefined && !validVersion(options.appVersion)) {
+      // Rejected, not coerced: silently substituting the default would hide the
+      // caller's mistake behind a URL that appears correct.
+      throw new Error(
+        `配置的 appVersion 无法用于登录链接：${JSON.stringify(options.appVersion)}（需形如 5.5.6）`,
+      )
+    }
+    this.appVersion = options.appVersion
   }
 
   /**
@@ -308,7 +332,8 @@ export class LoginClient {
     // The upstream echoes `platform` and `state` but omits the two parameters the
     // desktop app's own page carries (`version`, `loginSessionId`); see
     // {@link officialAuthUrl}.
-    return { region, state: data.state, url: officialAuthUrl(data.authUrl, region) }
+    const version = this.appVersion ?? resolveAppVersion(region)
+    return { region, state: data.state, url: officialAuthUrl(data.authUrl, version) }
   }
 
   /**

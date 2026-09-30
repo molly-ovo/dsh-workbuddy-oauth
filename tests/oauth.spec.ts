@@ -119,6 +119,20 @@ describe('begin', () => {
     expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://www.workbuddy.ai/v2/plugin/auth/state?platform=workbuddy')
   })
 
+  it('advertises the configured app version rather than a second constant', async () => {
+    // The version is a shape requirement (the page returns identical HTML for
+    // 0.0.1 and 99.0.0), but it must not claim something different from every
+    // other outbound request — so it comes from the same configured identity.
+    const fetchImpl = stubFetch(happyRoutes)
+    const request = await new LoginClient({ fetchImpl, appVersion: '7.7.7' }).begin('cn')
+    expect(new URL(request.url).searchParams.get('version')).toBe('7.7.7')
+  })
+
+  it('rejects an app version that is not URL-safe rather than substituting a default', async () => {
+    // Coercing would hide the caller's typo behind a URL that looks fine.
+    expect(() => new LoginClient({ appVersion: 'not a version' })).toThrow(/appVersion/)
+  })
+
   it('hands back the official-shaped URL the desktop app opens', async () => {
     // The upstream echoes only `platform` and `state`; the app appends `version`
     // and a per-attempt `loginSessionId`, and phone login needs the latter.
