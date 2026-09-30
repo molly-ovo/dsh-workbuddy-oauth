@@ -41,6 +41,18 @@ export type WorkBuddyLocaleKey =
   | 'noAccounts'
   | 'accountCount'
   | 'signedInWithModels'
+  | 'modelsHeading'
+  | 'contextWindowLabel'
+  | 'hideModel'
+  | 'modelVisibilityIntro'
+  | 'creditsHeading'
+  | 'queryCredits'
+  | 'creditsLoading'
+  | 'creditsError'
+  | 'creditsTotal'
+  | 'creditsUnlimited'
+  | 'creditsReset'
+  | 'creditsUnknownSize'
   | 'models'
   | 'noModels'
   | 'refresh'
@@ -92,6 +104,18 @@ export const zh: Record<WorkBuddyLocaleKey, string> = {
   noAccounts: '尚未登录任何账号',
   accountCount: '已登录 {count} 个账号',
   signedInWithModels: '已登录 · {count} 个模型',
+  modelsHeading: '模型',
+  contextWindowLabel: '上下文',
+  hideModel: '隐藏',
+  modelVisibilityIntro: '取消勾选可把模型从选择器隐藏；正在使用该模型的对话不受影响。',
+  creditsHeading: '积分余额',
+  queryCredits: '查询余额',
+  creditsLoading: '查询中…',
+  creditsError: '查询失败：{reason}',
+  creditsTotal: '剩余 {total}',
+  creditsUnlimited: '不限量',
+  creditsReset: '重置于 {time}',
+  creditsUnknownSize: '剩余 {remain}（总量未知）',
   models: '{count} 个模型',
   noModels: '无可用模型',
   refresh: '刷新',
@@ -144,6 +168,18 @@ export const en: Record<WorkBuddyLocaleKey, string> = {
   noAccounts: 'No account signed in',
   accountCount: '{count} account(s) signed in',
   signedInWithModels: 'Signed in · {count} models',
+  modelsHeading: 'Models',
+  contextWindowLabel: 'Context',
+  hideModel: 'Hide',
+  modelVisibilityIntro: 'Uncheck a model to hide it from the picker; chats already using it keep working.',
+  creditsHeading: 'Credit balance',
+  queryCredits: 'Check balance',
+  creditsLoading: 'Checking…',
+  creditsError: 'Check failed: {reason}',
+  creditsTotal: '{total} remaining',
+  creditsUnlimited: 'Unlimited',
+  creditsReset: 'Resets {time}',
+  creditsUnknownSize: '{remain} remaining',
   models: '{count} models',
   noModels: 'No models available',
   refresh: 'Refresh',

@@ -114,19 +114,22 @@ export class WorkBuddyCatalog {
   private models: readonly WorkBuddyModelInfo[]
   private visible = true
   private useMaximumContextWindow = false
+  private hiddenModels = new Set<string>()
 
   constructor(initial: readonly WorkBuddyModelInfo[] = FALLBACK_WORKBUDDY_MODELS) { this.models = initial }
 
   /** Current entries; empty while the variant has no usable credential. */
   current(): readonly WorkBuddyModelInfo[] {
     if (!this.visible) return []
-    return this.models.map(model => {
-      const current = modelWithCurrentPromotion(model)
-      const maximum = current.supportedContextWindows === undefined ? undefined : Math.max(...current.supportedContextWindows)
-      return this.useMaximumContextWindow && maximum !== undefined && maximum > current.contextWindow
-        ? { ...current, defaultContextWindow: current.defaultContextWindow ?? current.contextWindow, contextWindow: maximum }
-        : current
-    })
+    return this.models
+      .filter(model => !this.hiddenModels.has(model.id))
+      .map(model => {
+        const current = modelWithCurrentPromotion(model)
+        const maximum = current.supportedContextWindows === undefined ? undefined : Math.max(...current.supportedContextWindows)
+        return this.useMaximumContextWindow && maximum !== undefined && maximum > current.contextWindow
+          ? { ...current, defaultContextWindow: current.defaultContextWindow ?? current.contextWindow, contextWindow: maximum }
+          : current
+      })
   }
 
   /** Replace the list; callers invalidate their adapter snapshot after this. */
@@ -154,6 +157,28 @@ export class WorkBuddyCatalog {
     if (this.useMaximumContextWindow === useMaximum) return false
     this.useMaximumContextWindow = useMaximum
     return true
+  }
+
+  /**
+   * Replace the hidden-model set for this region.
+   *
+   * Returns whether the set changed, so the caller can skip invalidating the
+   * adapter when the toggle was a no-op. Hidden models stay hidden even when the
+   * roster is later replaced by a catalog refresh: the rule is about ids, not
+   * about the rows that happened to be present when it was set.
+   */
+  setHiddenModels(ids: ReadonlySet<string>): boolean {
+    const next = new Set(ids)
+    if (next.size === this.hiddenModels.size && [...next].every(id => this.hiddenModels.has(id))) {
+      return false
+    }
+    this.hiddenModels = next
+    return true
+  }
+
+  /** The model ids currently hidden, for the status document. */
+  hiddenModelIds(): readonly string[] {
+    return [...this.hiddenModels]
   }
 
   /** Models to fall back to when the upstream fetch fails; ignores visibility. */

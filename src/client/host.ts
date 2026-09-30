@@ -60,6 +60,8 @@ export type ControlRequest =
   | { action: 'login-complete'; state: string }
   | { action: 'logout'; uid: string }
   | { action: 'set-account-enabled'; uid: string; enabled: boolean }
+  | { action: 'set-model-visible'; region: string; modelId: string; visible: boolean }
+  | { action: 'refresh-credits'; uid: string }
 
 /**
  * POST one control action.

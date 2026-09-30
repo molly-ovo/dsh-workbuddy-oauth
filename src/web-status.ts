@@ -64,6 +64,14 @@ export interface WorkBuddyRegionView {
    * caller — which selected the models — knows which row each record describes.
    */
   probeResults: () => readonly { id: string; record: WorkBuddyProbeRecord }[]
+  /**
+   * Model ids the user has hidden for this region.
+   *
+   * A function like the other contributors rather than a frozen value: the
+   * hidden set is a persisted rule that changes out from under the document,
+   * and the card must reflect the current toggle state on each read.
+   */
+  hiddenModels: () => readonly string[]
 }
 
 /** Constructor dependencies for {@link workBuddyWebStatus}. */
@@ -96,7 +104,12 @@ function accountViews(
 
 /** One model's display fields. */
 function modelViews(models: readonly WorkBuddyModelInfo[]): readonly WorkBuddyWebModel[] {
-  return models.map(model => ({ id: model.id, name: model.name }))
+  return models.map(model => ({
+    id: model.id,
+    name: model.name,
+    contextWindow: model.contextWindow,
+    maxTokens: model.maxTokens,
+  }))
 }
 
 /** One region's slice of the document. */
@@ -113,6 +126,7 @@ function regionView(
     providerId: view.providerId,
     signedIn,
     models: modelViews(models),
+    hiddenModels: [...view.hiddenModels()],
     probeRunning: view.probeRunning(),
     probeCandidates: [...view.probeCandidates()],
     // Newest first: a detection the user just ran belongs at the top, not

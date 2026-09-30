@@ -41,6 +41,7 @@ import { createCredentialStore } from './store.ts'
 import { WorkBuddyUpstreamClient } from './upstream.ts'
 import { credentialFromLogin, deleteCredential, displayNameOf, listCredentials, probePathFor, type WorkBuddyCredential } from './credentials.ts'
 import { setAccountDisabled } from './account-state.ts'
+import { readHiddenModels, setRegionHiddenModels } from './hidden-models.ts'
 import { LoginClient, LoginPendingError } from './oauth.ts'
 import { regionEndpoints, type WorkBuddyRegion } from './region.ts'
 import { saveAccount } from './store.ts'
@@ -357,6 +358,20 @@ export function apply(ctx: Context, config: Config): void {
   ]
 
   /**
+   * Apply the persisted hidden-model rule to each catalog.
+   *
+   * Loaded once at startup; the catalog's `setHiddenModels` is separate from the
+   * roster (`set`), so a later catalog refresh cannot resurrect a hidden model.
+   * The read is fire-and-forget — until it lands, the catalog simply shows the
+   * full roster, which is the harmless default.
+   */
+  void readHiddenModels().then((hidden) => {
+    for (const runtime of runtimes) {
+      runtime.catalog.setHiddenModels(new Set(hidden[runtime.region]))
+    }
+  })
+
+  /**
    * Live login attempts, keyed by state.
    *
    * Held here rather than in a module global so a profile reload cannot leave a
@@ -551,6 +566,7 @@ export function apply(ctx: Context, config: Config): void {
             const record = runtime.probeService.recordFor(info.id)
             return record === undefined ? [] : [{ id: info.id, record }]
           }),
+        hiddenModels: () => runtime.catalog.hiddenModelIds(),
       })),
       controlKey,
     })
@@ -642,6 +658,43 @@ export function apply(ctx: Context, config: Config): void {
           await Promise.all(runtimes.map((runtime) => refreshCatalog(ctx, runtime, log, 'login')))
           ctx.emit('llm/adapters-updated')
           return { state: 'ok', reason: enabled ? 'enabled' : 'disabled' }
+        },
+        /**
+         * The card's counterpart to hiding a model.
+         *
+         * The host owns both the catalog filter and the persisted rule, so the
+         * picker and the checkbox cannot disagree. The loop's `runtime` is the
+         * region this route serves; the body's region is checked rather than
+         * trusted, since a route posting to the wrong region would hide the wrong
+         * roster.
+         */
+        setModelVisible: async (region, modelId, visible) => {
+          if (region !== runtime.region) {
+            return { state: 'failed', reason: `region mismatch: ${region}` }
+          }
+          const next = new Set(runtime.catalog.hiddenModelIds())
+          if (visible) next.delete(modelId)
+          else next.add(modelId)
+          const changed = runtime.catalog.setHiddenModels(next)
+          await setRegionHiddenModels(runtime.region, [...next])
+          if (changed) runtime.invalidate()
+          return { state: 'ok', reason: visible ? 'visible' : 'hidden' }
+        },
+        /**
+         * The card's counterpart to P5.1: fetch one account's balance.
+         *
+         * Reads the stored credential by uid and asks the upstream for its
+         * balance, returning it in `credits` for immediate display.
+         */
+        refreshCredits: async (uid) => {
+          const credential = (await listCredentials()).find(item => item.uid === uid)
+          if (credential === undefined) return { state: 'failed', reason: 'no such account' }
+          try {
+            const credits = await runtime.client.fetchCredits(credential)
+            return { state: 'ok', reason: 'credits', credits }
+          } catch (error: unknown) {
+            return { state: 'failed', reason: error instanceof Error ? error.message : String(error) }
+          }
         },
       }, controlKey)
     }

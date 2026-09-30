@@ -20,6 +20,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
 import { readStatus, sendControl } from './host.ts'
 import type { WorkBuddyLocaleKey } from './locales.ts'
 import type { WorkBuddyWebAccount, WorkBuddyWebStatus } from '../status-paths.ts'
+import type { WorkBuddyCredits } from '../upstream.ts'
 
 /** Props the Plugins page delivers to the bundle's configuration entry. */
 export type WorkBuddyConfigPageProps =
@@ -110,6 +111,8 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
   const [notice, setNotice] = useState<string>()
   const [busy, setBusy] = useState(false)
   const [checking, setChecking] = useState(false)
+  const [credits, setCredits] = useState<Record<string, WorkBuddyCredits>>({})
+  const [creditsBusy, setCreditsBusy] = useState<ReadonlySet<string>>(new Set())
   const mounted = useRef(false)
   /**
    * Guards the completion call so the button and the polling loop cannot both be
@@ -239,6 +242,56 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
     }
   }
 
+  /**
+   * Fetch one account's credit balance and hold it for display.
+   *
+   * The balance is shown from local state rather than the status document: a
+   * status read must not make a network call per account, so the balance is only
+   * fetched when the user asks. A failed fetch clears any stale value, so the
+   * card never keeps showing a balance it can no longer stand behind.
+   */
+  const queryCredits = async (uid: string): Promise<void> => {
+    if (status === undefined) return
+    setCreditsBusy(previous => new Set(previous).add(uid))
+    setNotice(undefined)
+    try {
+      const result = await sendControl(status.regions[0]?.controlPath ?? '', status.controlKey, {
+        action: 'refresh-credits',
+        uid,
+      })
+      if (result === undefined || result.state !== 'ok' || result.credits === undefined) {
+        setCredits(previous => { const next = { ...previous }; delete next[uid]; return next })
+        setNotice(t('creditsError', { reason: result?.reason ?? t('working') }))
+        return
+      }
+      setCredits(previous => ({ ...previous, [uid]: result.credits! }))
+    } finally {
+      if (mounted.current) setCreditsBusy(previous => { const next = new Set(previous); next.delete(uid); return next })
+    }
+  }
+
+  /**
+   * Hide or show one model.
+   *
+   * Posts to the region's own control path — the two regions share model ids, so
+   * a model toggle must land on the roster it was listed under.
+   */
+  const toggleModel = async (region: WorkBuddyWebStatus['regions'][number], modelId: string, visible: boolean): Promise<void> => {
+    if (status === undefined) return
+    const result = await sendControl(region.controlPath, status.controlKey, {
+      action: 'set-model-visible',
+      region: region.region,
+      modelId,
+      visible,
+    })
+    // Whether the host accepted or not, re-read so the checkbox reflects the
+    // persisted truth rather than a local guess.
+    await refresh()
+    if (result === undefined || result.state !== 'ok') {
+      setNotice(t('loginFailed', { reason: result?.reason ?? t('working') }))
+    }
+  }
+
   if (view === 'summary') return t('intro')
 
   return (
@@ -316,14 +369,12 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
             </span>
           </div>
           {status.regions.map(region => (
-            <div key={region.region} style={rowStyle}>
-              <span style={regionStyle}>{region.label}</span>
-              <span style={region.signedIn ? signedInStyle : mutedStyle}>
-                {region.signedIn
-                  ? t('signedInWithModels', { count: region.models.length })
-                  : t('signedOut')}
-              </span>
-            </div>
+            <RegionBlock
+              key={region.region}
+              region={region}
+              t={t}
+              onToggleModel={(modelId, visible) => toggleModel(region, modelId, visible)}
+            />
           ))}
           {/*
             One row per account, with the uid prefix visible: signing out or
@@ -336,6 +387,9 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
               account={account}
               t={t}
               busy={busy}
+              credits={credits[account.uid]}
+              creditsBusy={creditsBusy.has(account.uid)}
+              onQueryCredits={() => queryCredits(account.uid)}
               onToggle={(enabled) => runAccountAction(
                 { action: 'set-account-enabled', uid: account.uid, enabled },
                 account.label,
@@ -350,17 +404,76 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
 }
 
 /**
- * One account row: identity, state, and the two management actions.
+ * One region block: the sign-in summary, then its models with context window and
+ * a visibility checkbox.
+ *
+ * The checkbox is the borrow from connect's ContextTable: the hidden set lives
+ * host-side, and the card only renders which boxes are ticked. A signed-out
+ * region lists no models, so the checkbox column simply does not appear.
+ */
+function RegionBlock({ region, t, onToggleModel }: {
+  region: WorkBuddyWebStatus['regions'][number]
+  t: WorkBuddyConfigPageProps['t']
+  onToggleModel: (modelId: string, visible: boolean) => void
+}): ReactNode {
+  const hidden = new Set(region.hiddenModels)
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={rowStyle}>
+        <span style={regionStyle}>{region.label}</span>
+        <span style={region.signedIn ? signedInStyle : mutedStyle}>
+          {region.signedIn
+            ? t('signedInWithModels', { count: region.models.length })
+            : t('signedOut')}
+        </span>
+      </div>
+      {region.models.length === 0 ? null : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingLeft: 12 }}>
+          <span style={mutedStyle}>{t('modelVisibilityIntro')}</span>
+          {region.models.map(model => (
+            <label key={model.id} style={{ ...rowStyle, gap: 6 }}>
+              <input
+                type="checkbox"
+                checked={!hidden.has(model.id)}
+                onChange={() => onToggleModel(model.id, hidden.has(model.id))}
+              />
+              <span style={regionStyle}>{model.name}</span>
+              <span style={mutedStyle}>
+                {t('contextWindowLabel')} {formatContext(model.contextWindow)}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Render a token count compactly: 1,000,000 → `1M`, 192,000 → `192K`. */
+function formatContext(tokens: number): string {
+  if (tokens >= 1_000_000) {
+    const m = tokens / 1_000_000
+    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`
+  }
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`
+  return String(tokens)
+}
+
+/**
+ * One account row: identity, state, and the management actions.
  *
  * Signing out is irreversible (it deletes the stored credential), so it asks for
  * confirmation first — the command path requires typing a uid prefix, which is
  * its own confirmation, and a bare button here would be easier to misfire than
  * either.
  */
-function AccountRow({ account, t, busy, onToggle, onLogout }: {
+function AccountRow({ account, t, busy, credits, creditsBusy, onQueryCredits, onToggle, onLogout }: {
   account: WorkBuddyWebAccount
   t: WorkBuddyConfigPageProps['t']
   busy: boolean
+  credits?: WorkBuddyCredits | undefined
+  creditsBusy: boolean
+  onQueryCredits: () => void
   onToggle: (enabled: boolean) => Promise<void>
   onLogout: () => Promise<void>
 }): ReactNode {
@@ -371,6 +484,14 @@ function AccountRow({ account, t, busy, onToggle, onLogout }: {
       <span style={mutedStyle}>{account.uid.slice(0, 8)}</span>
       <span style={mutedStyle}>{t(account.enabled ? 'enabledTag' : 'disabledTag')}</span>
       <span style={{ flex: 1 }} />
+      <button
+        type="button"
+        style={buttonStyle}
+        disabled={busy || creditsBusy}
+        onClick={() => { onQueryCredits() }}
+      >
+        {creditsBusy ? t('creditsLoading') : t('queryCredits')}
+      </button>
       <button
         type="button"
         style={buttonStyle}
@@ -398,7 +519,33 @@ function AccountRow({ account, t, busy, onToggle, onLogout }: {
           {t('logoutConfirm', { label: account.label })}
         </span>
       ) : null}
+      {credits !== undefined ? (
+        <span style={{ ...mutedStyle, flexBasis: '100%' }}>
+          {renderCredits(credits, t)}
+        </span>
+      ) : null}
     </div>
+  )
+}
+
+/** One line summarising a balance: total, then each package's remaining share. */
+function renderCredits(credits: WorkBuddyCredits, t: WorkBuddyConfigPageProps['t']): ReactNode {
+  const total = credits.unlimited === true
+    ? t('creditsUnlimited')
+    : t('creditsTotal', { total: credits.total })
+  const packages = credits.accounts.map(account => {
+    if (account.unlimited === true) return `${account.packageName}: ${t('creditsUnlimited')}`
+    if (account.size === 0) return `${account.packageName}: ${t('creditsUnknownSize', { remain: account.remain })}`
+    return `${account.packageName}: ${account.remain}/${account.size}`
+  })
+  const reset = credits.cycleResetTime === undefined ? null : t('creditsReset', { time: credits.cycleResetTime })
+  return (
+    <>
+      <span style={regionStyle}>{t('creditsHeading')}</span>
+      <span>{total}</span>
+      {packages.length > 0 ? <span style={mutedStyle}>{packages.join(' · ')}</span> : null}
+      {reset === null ? null : <span style={mutedStyle}>{reset}</span>}
+    </>
   )
 }
 

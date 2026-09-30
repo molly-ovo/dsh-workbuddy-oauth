@@ -192,4 +192,46 @@ describe('control route guards', () => {
     })
     expect(result.status).toBe(404)
   })
+
+  it('forwards a model-visibility toggle with its region and boolean state', async () => {
+    const setModelVisible = vi.fn(async () => ({ state: 'ok' }))
+    const result = await dispatch({ ...baseDeps, setModelVisible }, createControlKey(), {
+      body: JSON.stringify({ action: 'set-model-visible', region: 'cn', modelId: 'hy3', visible: false }),
+    })
+    expect(result.status).toBe(200)
+    expect(setModelVisible).toHaveBeenCalledWith('cn', 'hy3', false)
+  })
+
+  it('rejects a model-visibility toggle with an unknown region or non-boolean state', async () => {
+    const setModelVisible = vi.fn(async () => ({ state: 'ok' }))
+    // Region is validated against the known set, not passed through: an arbitrary
+    // string must not let the browser hide a roster on a fabricated region.
+    const badRegion = await dispatch({ ...baseDeps, setModelVisible }, createControlKey(), {
+      body: JSON.stringify({ action: 'set-model-visible', region: 'https://evil', modelId: 'hy3', visible: true }),
+    })
+    expect(badRegion.status).toBe(400)
+    const badState = await dispatch({ ...baseDeps, setModelVisible }, createControlKey(), {
+      body: JSON.stringify({ action: 'set-model-visible', region: 'cn', modelId: 'hy3', visible: 'false' }),
+    })
+    expect(badState.status).toBe(400)
+    expect(setModelVisible).not.toHaveBeenCalled()
+  })
+
+  it('forwards a credit refresh with the uid', async () => {
+    const refreshCredits = vi.fn(async () => ({ state: 'ok' }))
+    const result = await dispatch({ ...baseDeps, refreshCredits }, createControlKey(), {
+      body: JSON.stringify({ action: 'refresh-credits', uid: 'uid-a' }),
+    })
+    expect(result.status).toBe(200)
+    expect(refreshCredits).toHaveBeenCalledWith('uid-a')
+  })
+
+  it('rejects a credit refresh with a blank uid', async () => {
+    const refreshCredits = vi.fn(async () => ({ state: 'ok' }))
+    const result = await dispatch({ ...baseDeps, refreshCredits }, createControlKey(), {
+      body: JSON.stringify({ action: 'refresh-credits', uid: '   ' }),
+    })
+    expect(result.status).toBe(400)
+    expect(refreshCredits).not.toHaveBeenCalled()
+  })
 })

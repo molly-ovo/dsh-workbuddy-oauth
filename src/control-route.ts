@@ -46,6 +46,8 @@ export type WorkBuddyControlAction =
   | { action: 'login-complete'; state: string }
   | { action: 'logout'; uid: string }
   | { action: 'set-account-enabled'; uid: string; enabled: boolean }
+  | { action: 'set-model-visible'; region: string; modelId: string; visible: boolean }
+  | { action: 'refresh-credits'; uid: string }
 
 /** Constructor dependencies. */
 export interface WorkBuddyControlRouteOptions {
@@ -85,6 +87,22 @@ export interface WorkBuddyControlRouteOptions {
    * {@link logout}.
    */
   setAccountEnabled?: (uid: string, enabled: boolean) => Promise<WorkBuddyControlResult>
+  /**
+   * Hide or show one model for a region.
+   *
+   * The card's counterpart to the hidden-models rule; the host owns the
+   * persistence and the catalog filtering, so the picker and the checkbox cannot
+   * disagree about what is hidden.
+   */
+  setModelVisible?: (region: string, modelId: string, visible: boolean) => Promise<WorkBuddyControlResult>
+  /**
+   * Fetch one account's credit balance.
+   *
+   * The card's counterpart to P5.1; returns the balance in `credits` rather than
+   * storing it host-side, so the card shows it immediately after a refresh
+   * without a second status round-trip.
+   */
+  refreshCredits?: (uid: string) => Promise<WorkBuddyControlResult>
   /** Route path to mount; defaults to {@link WORKBUDDY_CONTROL_PATH}. */
   path?: string
 }
@@ -168,6 +186,20 @@ function parseAction(text: string): WorkBuddyControlAction | undefined {
     if (typeof enabled !== 'boolean') return undefined
     return { action: 'set-account-enabled', uid: uid.trim(), enabled }
   }
+  if (action === 'set-model-visible') {
+    const region = wrapped['region']
+    if (region !== 'cn' && region !== 'global') return undefined
+    const modelId = wrapped['modelId']
+    if (typeof modelId !== 'string' || modelId.trim() === '') return undefined
+    const visible = wrapped['visible']
+    if (typeof visible !== 'boolean') return undefined
+    return { action: 'set-model-visible', region, modelId: modelId.trim(), visible }
+  }
+  if (action === 'refresh-credits') {
+    const uid = wrapped['uid']
+    if (typeof uid !== 'string' || uid.trim() === '') return undefined
+    return { action: 'refresh-credits', uid: uid.trim() }
+  }
   return undefined
 }
 
@@ -246,6 +278,22 @@ export function workBuddyControlHandler(
           return
         }
         json(res, 200, await deps.setAccountEnabled(action.uid, action.enabled))
+        return
+      }
+      if (action.action === 'set-model-visible') {
+        if (deps.setModelVisible === undefined) {
+          json(res, 404, { error: 'model-visibility-not-supported' })
+          return
+        }
+        json(res, 200, await deps.setModelVisible(action.region, action.modelId, action.visible))
+        return
+      }
+      if (action.action === 'refresh-credits') {
+        if (deps.refreshCredits === undefined) {
+          json(res, 404, { error: 'credits-not-supported' })
+          return
+        }
+        json(res, 200, await deps.refreshCredits(action.uid))
         return
       }
       json(res, 200, await deps.probe(action.model))

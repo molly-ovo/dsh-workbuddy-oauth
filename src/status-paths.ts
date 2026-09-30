@@ -15,7 +15,7 @@
  */
 
 import type { WorkBuddyRegion } from './region.ts'
-import type { WorkBuddyEffort } from './upstream.ts'
+import type { WorkBuddyCredits, WorkBuddyEffort } from './upstream.ts'
 import type { WorkBuddyProbeValidation } from './probe-store.ts'
 
 /** Read-only status endpoint consumed by this plugin's browser half. */
@@ -75,6 +75,10 @@ export interface WorkBuddyWebAccount {
 export interface WorkBuddyWebModel {
   id: string
   name: string
+  /** Declared context window, tokens. */
+  contextWindow: number
+  /** Declared max output tokens. */
+  maxTokens: number
 }
 
 /** One model's recorded probe observation. */
@@ -122,6 +126,14 @@ export interface WorkBuddyWebRegion {
    * distinguishes the two.
    */
   models: readonly WorkBuddyWebModel[]
+  /**
+   * Model ids the user has hidden from the picker, for this region.
+   *
+   * Carried so the card can render the checkbox state without holding a second
+   * copy of the rule; the host already filters these out of `models`, so the
+   * card only needs the ids to know which boxes to tick.
+   */
+  hiddenModels: readonly string[]
   /** Whether a probe sweep is in flight for this region right now. */
   probeRunning: boolean
   /**
@@ -165,4 +177,11 @@ export interface WorkBuddyControlResult {
   url?: string
   /** Login attempt id for `login-begin`, to be handed back to `login-complete`. */
   loginState?: string
+  /**
+   * Credit balance for `refresh-credits`.
+   *
+   * Returned rather than logged host-side so the card can show it immediately
+   * after a balance refresh, without a second status round-trip.
+   */
+  credits?: WorkBuddyCredits
 }
