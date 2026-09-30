@@ -119,23 +119,9 @@ describe('begin', () => {
     expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://www.workbuddy.ai/v2/plugin/auth/state?platform=workbuddy')
   })
 
-  it('advertises the configured app version rather than a second constant', async () => {
-    // The version is a shape requirement (the page returns identical HTML for
-    // 0.0.1 and 99.0.0), but it must not claim something different from every
-    // other outbound request — so it comes from the same configured identity.
-    const fetchImpl = stubFetch(happyRoutes)
-    const request = await new LoginClient({ fetchImpl, appVersion: '7.7.7' }).begin('cn')
-    expect(new URL(request.url).searchParams.get('version')).toBe('7.7.7')
-  })
-
-  it('rejects an app version that is not URL-safe rather than substituting a default', async () => {
-    // Coercing would hide the caller's typo behind a URL that looks fine.
-    expect(() => new LoginClient({ appVersion: 'not a version' })).toThrow(/appVersion/)
-  })
-
   it('hands back the official-shaped URL the desktop app opens', async () => {
-    // The upstream echoes only `platform` and `state`; the app appends `version`
-    // and a per-attempt `loginSessionId`, and phone login needs the latter.
+    // The upstream echoes only `platform` and `state`; the app also needs a
+    // per-attempt `loginSessionId`, which phone login depends on.
     const fetchImpl = stubFetch([
       {
         match: '/auth/state',
@@ -154,8 +140,26 @@ describe('begin', () => {
     expect(url.pathname).toBe('/login/')
     expect(url.searchParams.get('platform')).toBe('workbuddy')
     expect(url.searchParams.get('state')).toBe('st-1')
-    expect(url.searchParams.get('version')).toBe('5.5.6')
     expect(url.searchParams.get('loginSessionId')).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it('sends no version parameter, since the server does not require one', async () => {
+    // The page renders identically with and without it, and nothing in the
+    // plugin can keep a client version current (no field in /v3/config, no update
+    // feed, and the only published official package is the CLI, a different
+    // product). Claiming a version would be a stale claim; omitting it is honest
+    // and the page does not care.
+    const fetchImpl = stubFetch([
+      {
+        match: '/auth/state',
+        reply: () => envelope({
+          code: 0,
+          data: { state: 'st-1', authUrl: 'https://www.workbuddy.cn/login/?platform=workbuddy&state=st-1' },
+        }),
+      },
+    ])
+    const url = new URL((await new LoginClient({ fetchImpl }).begin('cn')).url)
+    expect(url.searchParams.has('version')).toBe(false)
   })
 
   it('gives each attempt its own loginSessionId', async () => {
@@ -175,8 +179,8 @@ describe('begin', () => {
     expect(first).not.toBe(second)
   })
 
-  it('keeps version and loginSessionId the upstream already supplied', async () => {
-    // If the upstream starts returning them, its values win over ours.
+  it('keeps a loginSessionId the upstream already supplied', async () => {
+    // If the upstream starts returning one, its value wins over ours.
     const fetchImpl = stubFetch([
       {
         match: '/auth/state',
@@ -184,13 +188,12 @@ describe('begin', () => {
           code: 0,
           data: {
             state: 'st-1',
-            authUrl: 'https://www.workbuddy.cn/login/?platform=workbuddy&state=st-1&version=9.9.9&loginSessionId=upstream-id',
+            authUrl: 'https://www.workbuddy.cn/login/?platform=workbuddy&state=st-1&loginSessionId=upstream-id',
           },
         }),
       },
     ])
     const url = new URL((await new LoginClient({ fetchImpl }).begin('cn')).url)
-    expect(url.searchParams.get('version')).toBe('9.9.9')
     expect(url.searchParams.get('loginSessionId')).toBe('upstream-id')
   })
 })

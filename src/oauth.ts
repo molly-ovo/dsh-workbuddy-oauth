@@ -18,7 +18,6 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { resolveAppVersion, validVersion } from './identity.ts'
 import { regionEndpoints, type WorkBuddyRegion } from './region.ts'
 
 /** User agent the login endpoints expect. Do not substitute the plugin's own. */
@@ -38,44 +37,41 @@ export const LOGIN_USER_AGENT = 'CLI/2.63.2 CodeBuddy/2.63.2'
 export const AUTH_PLATFORM = 'workbuddy'
 
 /**
- * Add the two query parameters the desktop app's authorization URL carries.
+ * Add the one query parameter the desktop app's authorization URL needs.
  *
- * The state endpoint echoes back only `platform` and `state` — it ignores
- * `version` and `loginSessionId` when they are sent on the request, and does not
- * mint them itself (verified against the live endpoint). The desktop app
- * therefore appends them client-side, and `loginSessionId` is a fresh UUID each
- * time the app opens the page, so it is a per-attempt correlation id rather than
- * server state.
+ * The state endpoint echoes back only `platform` and `state`; the desktop app
+ * appends `loginSessionId` client-side (the endpoint ignores it on the request).
+ * It is a fresh UUID per attempt, so it is a correlation id rather than server
+ * state, and it is what lets the phone-login (OneID) path tie the page to the
+ * client that opened it — without it the page's phone flow rejects the token.
  *
- * `loginSessionId` is what lets the phone-login (OneID) path correlate the page
- * with the client that opened it; without it the page's phone flow rejects the
- * token. A malformed URL is returned unchanged rather than throwing: a login page
- * that opens is strictly better than a hard failure, and the upstream is the
- * authority on what it issued.
+ * **`version` is deliberately not sent.** The app's URL carries one, but it is
+ * not required: the page returns byte-identical HTML with and without it
+ * (`0.0.1`, `5.5.6`, `99.0.0` and absent all measured the same). Sending our own
+ * would mean *claiming* a client version that nothing in the plugin can keep
+ * current — the upstream publishes no queryable desktop-app version (no field in
+ * `/v3/config`, no update feed, no npm package; the only published official
+ * package is the CLI, which is a different product and a different numbering) —
+ * so the honest choice is to make no claim rather than a stale one. If the
+ * upstream ever starts requiring it, the desktop client will necessarily send it
+ * and the value can be copied from there.
  *
- * **`version` is a shape requirement, not a currency claim.** Measured: the page
- * returns byte-identical HTML for `0.0.1`, `5.5.6` and `99.0.0`, so there is
- * nothing to gain from fetching "the latest version" — it only has to be present
- * and well formed. Its value comes from the plugin's own app-version identity, so
- * a configured `appVersion` governs the sign-in URL too instead of a second
- * constant drifting away from it.
+ * A malformed URL is returned unchanged rather than throwing: a login page that
+ * opens is strictly better than a hard failure, and the upstream is the authority
+ * on what it issued.
  *
  * @param authUrl - the URL the state endpoint returned.
- * @param version - the desktop-app version to advertise; see {@link resolveAppVersion}.
- * @returns the URL with `version` and `loginSessionId` present.
+ * @returns the URL with `loginSessionId` present.
  */
-export function officialAuthUrl(authUrl: string, version: string): string {
+export function officialAuthUrl(authUrl: string): string {
   let parsed: URL
   try {
     parsed = new URL(authUrl)
   } catch {
     return authUrl
   }
-  // Only fill them in when absent, so a future upstream that starts returning
-  // them keeps its own values.
-  if (!parsed.searchParams.has('version')) {
-    parsed.searchParams.set('version', version)
-  }
+  // Only fill it in when absent, so a future upstream that starts returning it
+  // keeps its own value.
   if (!parsed.searchParams.has('loginSessionId')) {
     parsed.searchParams.set('loginSessionId', randomUUID())
   }
@@ -190,16 +186,6 @@ export interface LoginClientOptions {
   minPollIntervalMs?: number
   /** Override the state lifetime. */
   loginTtlMs?: number
-  /**
-   * Desktop-app version advertised in the authorization URL.
-   *
-   * Optional and validated like every other outbound version: the value reaches
-   * a URL query string, so a malformed one is rejected rather than sent. Absent
-   * falls back to the region's {@link resolveAppVersion} default, which the
-   * plugin's own `appVersion` config can already override — so the sign-in URL
-   * and the outbound identity never claim different versions.
-   */
-  appVersion?: string
 }
 
 /** A live sign-in attempt. */
@@ -223,7 +209,6 @@ export class LoginClient {
   private readonly now: () => number
   private readonly minPollIntervalMs: number
   private readonly loginTtlMs: number
-  private readonly appVersion: string | undefined
 
   /**
    * Live attempts, keyed by state.
@@ -242,14 +227,6 @@ export class LoginClient {
     this.now = options.now ?? (() => Date.now())
     this.minPollIntervalMs = options.minPollIntervalMs ?? MIN_POLL_INTERVAL_MS
     this.loginTtlMs = options.loginTtlMs ?? LOGIN_TTL_MS
-    if (options.appVersion !== undefined && !validVersion(options.appVersion)) {
-      // Rejected, not coerced: silently substituting the default would hide the
-      // caller's mistake behind a URL that appears correct.
-      throw new Error(
-        `配置的 appVersion 无法用于登录链接：${JSON.stringify(options.appVersion)}（需形如 5.5.6）`,
-      )
-    }
-    this.appVersion = options.appVersion
   }
 
   /**
@@ -329,11 +306,9 @@ export class LoginClient {
       throw new Error('上游未返回 authUrl，登录无法继续。')
     }
     this.pending.set(data.state, { region, createdAt: this.now() })
-    // The upstream echoes `platform` and `state` but omits the two parameters the
-    // desktop app's own page carries (`version`, `loginSessionId`); see
-    // {@link officialAuthUrl}.
-    const version = this.appVersion ?? resolveAppVersion(region)
-    return { region, state: data.state, url: officialAuthUrl(data.authUrl, version) }
+    // The upstream echoes `platform` and `state`; the app's page also needs a
+    // `loginSessionId`. Deliberately no `version`; see {@link officialAuthUrl}.
+    return { region, state: data.state, url: officialAuthUrl(data.authUrl) }
   }
 
   /**

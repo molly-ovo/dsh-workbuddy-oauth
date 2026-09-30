@@ -357,13 +357,9 @@ export function apply(ctx: Context, config: Config): void {
    * Live login attempts, keyed by state.
    *
    * Held here rather than in a module global so a profile reload cannot leave a
-   * stale pending login behind. The configured app version rides along so the
-   * authorization URL advertises the same version as every other outbound
-   * request, rather than a second constant that can drift from it.
+   * stale pending login behind.
    */
-  const logins = new LoginClient({
-    ...config.appVersion === undefined || config.appVersion === '' ? {} : { appVersion: config.appVersion },
-  })
+  const logins = new LoginClient()
 
   /** Schedules outstanding, cleared on disposal. */
   const timers: NodeJS.Timeout[] = []
