@@ -61,7 +61,7 @@ async function startShim(store: CredentialStore): Promise<{ origin: string; toke
     store,
     client: rateLimited as never,
     catalog: new WorkBuddyCatalog(),
-    logger: { warn: vi.fn(), error: vi.fn() },
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   })
   await shim.ready
   return { origin: shim.baseUrl(), token: shim.token() }

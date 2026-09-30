@@ -58,6 +58,7 @@ export {
   credentialFromLogin,
   displayNameOf,
   listCredentials,
+  maskPhoneNumbers,
   type WorkBuddyCredential,
 } from './credentials.ts'
 export { LoginClient, LoginPendingError, LoginExpiredError, parseRegionInput } from './oauth.ts'

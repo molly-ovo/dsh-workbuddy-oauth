@@ -17,6 +17,7 @@ import {
   credentialsDir,
   deleteCredential,
   displayNameOf,
+  maskPhoneNumbers,
   isExpired,
   listCredentials,
   readCredential,
@@ -158,6 +159,46 @@ describe('expiry and labels', () => {
   it('prefers the nickname and falls back to a uid prefix', () => {
     expect(displayNameOf(sample({ nickname: '小明' }))).toBe('小明')
     expect(displayNameOf(sample({ uid: 'abcdef123456' }))).toBe('abcdef12')
+  })
+})
+
+describe('phone masking', () => {
+  it('redacts an account named after its own phone number', () => {
+    // The whole reason this exists: the nickname is printed by every command,
+    // the settings card and the status document, so an account named with a
+    // mobile number would be published verbatim.
+    expect(maskPhoneNumbers('13800138000')).toBe('138*****000')
+  })
+
+  it('masks a number embedded in a longer name', () => {
+    expect(maskPhoneNumbers('张三 13800138000')).toBe('张三 138*****000')
+    expect(maskPhoneNumbers('13800138000(工作)')).toBe('138*****000(工作)')
+  })
+
+  it('keeps a typed country-code prefix, masking only the number', () => {
+    expect(maskPhoneNumbers('+8613800138000')).toBe('+86138*****000')
+    expect(maskPhoneNumbers('86-13800138000')).toBe('86-138*****000')
+  })
+
+  it('leaves names without a mobile number alone', () => {
+    for (const name of ['小明', '爱在', '', 'user-42', '1380013800', '138001380001']) {
+      expect(maskPhoneNumbers(name)).toBe(name)
+    }
+  })
+
+  it('does not mask digits that merely contain a phone-shaped run', () => {
+    // A longer digit run is an id, not a number: masking its middle would
+    // corrupt it while protecting nothing.
+    expect(maskPhoneNumbers('113800138000')).toBe('113800138000')
+    expect(maskPhoneNumbers('9138001380001')).toBe('9138001380001')
+  })
+
+  it('masks every number when a name carries more than one', () => {
+    expect(maskPhoneNumbers('13800138000 / 13900139000')).toBe('138*****000 / 139*****000')
+  })
+
+  it('applies through displayNameOf, so every surface is covered', () => {
+    expect(displayNameOf(sample({ nickname: '13800138000' }))).toBe('138*****000')
   })
 })
 

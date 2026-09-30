@@ -256,8 +256,50 @@ export function isExpired(credential: WorkBuddyCredential, marginMs = 60_000, no
   return credential.expiresAtMs - marginMs <= now
 }
 
-/** Human-readable account label for status output. */
+/**
+ * A mainland-China mobile number, optionally carrying an `86` country code.
+ *
+ * The surrounding `(?<!\d)` / `(?!\d)` guards keep a longer digit run from being
+ * partially masked: in `113800138000` the inner digits are not a phone number,
+ * and masking them would mangle an id that merely contains those digits.
+ */
+const PHONE_PATTERN = /(?<!\d)(?:\+?86[-\s]?)?(1[3-9]\d{9})(?!\d)/gu
+
+/** How many leading and trailing digits stay readable; the rest become `*`. */
+const PHONE_VISIBLE_DIGITS = 3
+
+/**
+ * Mask any mobile number inside a display name.
+ *
+ * Applied at the *display* boundary only: the credential file keeps the real
+ * nickname, so nothing is lost and a later feature can still use it. A name that
+ * merely contains a number — `张三 13800138000` — is masked in place, because
+ * redacting only exact matches would leak the common case.
+ *
+ * A country-code prefix the user typed is kept (`+86` is not personal data); only
+ * the number itself is redacted.
+ *
+ * @param text - the raw display name.
+ * @returns the name with every mobile number reduced to `3 digits + stars + 3`.
+ */
+export function maskPhoneNumbers(text: string): string {
+  return text.replace(PHONE_PATTERN, (whole: string, digits: string) => {
+    const stars = '*'.repeat(Math.max(0, digits.length - PHONE_VISIBLE_DIGITS * 2))
+    const masked = `${digits.slice(0, PHONE_VISIBLE_DIGITS)}${stars}${digits.slice(-PHONE_VISIBLE_DIGITS)}`
+    return whole.replace(digits, masked)
+  })
+}
+
+/**
+ * Human-readable account label for status output.
+ *
+ * The nickname is masked rather than returned raw: an account nicknamed with its
+ * own phone number would otherwise be printed verbatim by every command, the
+ * settings card, and the status document.
+ */
 export function displayNameOf(credential: WorkBuddyCredential): string {
-  if (credential.nickname !== undefined && credential.nickname !== '') return credential.nickname
+  if (credential.nickname !== undefined && credential.nickname !== '') {
+    return maskPhoneNumbers(credential.nickname)
+  }
   return credential.uid.slice(0, 8)
 }

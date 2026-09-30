@@ -50,8 +50,16 @@ export function cooldownForKind(kind: UpstreamErrorKind, now: number = Date.now(
   return ms === undefined ? undefined : now + ms
 }
 
-/** Minimal logger surface the plugin context already provides. */
+/**
+ * Minimal logger surface the plugin context already provides.
+ *
+ * `info` exists so one line per chat request can report **which account served
+ * it**. Selection behaviour (rotation, cooldown, session affinity) is otherwise
+ * invisible: nothing about the response says which credential produced it, so
+ * without this an operator cannot tell a working rotation from a stuck pool.
+ */
 export interface ShimLogger {
+  info(...args: unknown[]): void
   warn(...args: unknown[]): void
   error(...args: unknown[]): void
 }
@@ -252,6 +260,20 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
     const controller = new AbortController()
     req.on('close', () => controller.abort())
     const result = await client.chatStream(credential, prepared, controller.signal)
+
+    // One line per request naming the serving account. This is the only
+    // observable evidence of selection behaviour: alternating uids mean rotation,
+    // a repeated uid within one conversation means affinity held, and an account
+    // dropping out after a failure means cooldown parked it.
+    //
+    // The uid is already a non-personal identifier (the credential file name),
+    // and only its first 8 characters are logged — enough to tell accounts apart
+    // without publishing a full identifier. The nickname is deliberately not
+    // logged: it can be a phone number, which is why `displayNameOf` masks it.
+    logger?.info(
+      `dsh-workbuddy-standalone: chat ${result.ok ? 'ok' : result.kind} via uid=${credential.uid.slice(0, 8)}`
+      + `${sessionKey === undefined ? ' (no session)' : ''}`,
+    )
 
     if (!result.ok) {
       // Park the account out of selection when the failure is account-shaped.
