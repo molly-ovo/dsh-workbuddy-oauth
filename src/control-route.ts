@@ -44,6 +44,8 @@ export type WorkBuddyControlAction =
   | { action: 'refresh' }
   | { action: 'login-begin'; region: string }
   | { action: 'login-complete'; state: string }
+  | { action: 'logout'; uid: string }
+  | { action: 'set-account-enabled'; uid: string; enabled: boolean }
 
 /** Constructor dependencies. */
 export interface WorkBuddyControlRouteOptions {
@@ -69,6 +71,20 @@ export interface WorkBuddyControlRouteOptions {
    * reports `pending` while they have not.
    */
   loginComplete?: (state: string) => Promise<WorkBuddyControlResult>
+  /**
+   * Delete one stored credential.
+   *
+   * The card's counterpart to `/wb-logout`. The host owns the deletion so the
+   * command and the card cannot disagree about what signing out means.
+   */
+  logout?: (uid: string) => Promise<WorkBuddyControlResult>
+  /**
+   * Enable or disable one account without deleting it.
+   *
+   * The card's counterpart to `/wb-account enable|disable`: reversible, unlike
+   * {@link logout}.
+   */
+  setAccountEnabled?: (uid: string, enabled: boolean) => Promise<WorkBuddyControlResult>
   /** Route path to mount; defaults to {@link WORKBUDDY_CONTROL_PATH}. */
   path?: string
 }
@@ -138,6 +154,20 @@ function parseAction(text: string): WorkBuddyControlAction | undefined {
     if (typeof state !== 'string' || state.trim() === '') return undefined
     return { action: 'login-complete', state: state.trim() }
   }
+  if (action === 'logout') {
+    // A uid is required and must be non-empty: an absent one would otherwise be
+    // read as "delete everything", which is the opposite of a targeted action.
+    const uid = wrapped['uid']
+    if (typeof uid !== 'string' || uid.trim() === '') return undefined
+    return { action: 'logout', uid: uid.trim() }
+  }
+  if (action === 'set-account-enabled') {
+    const uid = wrapped['uid']
+    if (typeof uid !== 'string' || uid.trim() === '') return undefined
+    const enabled = wrapped['enabled']
+    if (typeof enabled !== 'boolean') return undefined
+    return { action: 'set-account-enabled', uid: uid.trim(), enabled }
+  }
   return undefined
 }
 
@@ -200,6 +230,22 @@ export function workBuddyControlHandler(
           return
         }
         json(res, 200, await deps.loginComplete(action.state))
+        return
+      }
+      if (action.action === 'logout') {
+        if (deps.logout === undefined) {
+          json(res, 404, { error: 'logout-not-supported' })
+          return
+        }
+        json(res, 200, await deps.logout(action.uid))
+        return
+      }
+      if (action.action === 'set-account-enabled') {
+        if (deps.setAccountEnabled === undefined) {
+          json(res, 404, { error: 'account-toggle-not-supported' })
+          return
+        }
+        json(res, 200, await deps.setAccountEnabled(action.uid, action.enabled))
         return
       }
       json(res, 200, await deps.probe(action.model))

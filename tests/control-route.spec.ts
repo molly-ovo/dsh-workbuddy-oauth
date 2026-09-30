@@ -141,4 +141,55 @@ describe('control route guards', () => {
     })
     expect(result.status).toBe(404)
   })
+
+  it('forwards a logout to the host with the uid', async () => {
+    const logout = vi.fn(async () => ({ state: 'ok' }))
+    const result = await dispatch({ ...baseDeps, logout }, createControlKey(), {
+      body: JSON.stringify({ action: 'logout', uid: 'uid-a' }),
+    })
+    expect(result.status).toBe(200)
+    // A targeted action must name its target: deleting whatever happens to be
+    // first would be a data-loss bug in a single click.
+    expect(logout).toHaveBeenCalledWith('uid-a')
+  })
+
+  it('rejects a logout with a blank uid instead of deleting something', async () => {
+    const logout = vi.fn(async () => ({ state: 'ok' }))
+    for (const uid of ['', '   ']) {
+      const result = await dispatch({ ...baseDeps, logout }, createControlKey(), {
+        body: JSON.stringify({ action: 'logout', uid }),
+      })
+      expect(result.status).toBe(400)
+    }
+    expect(logout).not.toHaveBeenCalled()
+  })
+
+  it('forwards an account toggle with the uid and the requested state', async () => {
+    const setAccountEnabled = vi.fn(async () => ({ state: 'ok' }))
+    const result = await dispatch({ ...baseDeps, setAccountEnabled }, createControlKey(), {
+      body: JSON.stringify({ action: 'set-account-enabled', uid: 'uid-b', enabled: false }),
+    })
+    expect(result.status).toBe(200)
+    expect(setAccountEnabled).toHaveBeenCalledWith('uid-b', false)
+  })
+
+  it('rejects an account toggle with a non-boolean state', async () => {
+    // `"false"` (a string) must not be read as enablement: that would invert the
+    // action the user asked for.
+    const setAccountEnabled = vi.fn(async () => ({ state: 'ok' }))
+    const result = await dispatch({ ...baseDeps, setAccountEnabled }, createControlKey(), {
+      body: JSON.stringify({ action: 'set-account-enabled', uid: 'uid-b', enabled: 'false' }),
+    })
+    expect(result.status).toBe(400)
+    expect(setAccountEnabled).not.toHaveBeenCalled()
+  })
+
+  it('answers 404 when a route was built without the logout handler', async () => {
+    // The handlers are optional, so a route mounted by an older caller must say
+    // "not supported" rather than silently succeed.
+    const result = await dispatch(baseDeps, createControlKey(), {
+      body: JSON.stringify({ action: 'logout', uid: 'uid-a' }),
+    })
+    expect(result.status).toBe(404)
+  })
 })

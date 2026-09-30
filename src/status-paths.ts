@@ -61,6 +61,14 @@ export interface WorkBuddyWebAccount {
   region: WorkBuddyRegion
   /** Access-token expiry, epoch milliseconds. */
   expiresAtMs: number
+  /**
+   * Whether this account may serve requests.
+   *
+   * Carried so the card can label the state without holding a second copy of the
+   * enable/disable rule; a disabled account is still listed, because it is still
+   * signed in.
+   */
+  enabled: boolean
 }
 
 /** One model as the card's model list and probe picker need it. */

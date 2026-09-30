@@ -18,6 +18,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { displayNameOf, listCredentials, type WorkBuddyCredential } from './credentials.ts'
+import { disabledUids } from './account-state.ts'
 import { regionEndpoints, type WorkBuddyRegion } from './region.ts'
 import { hostIsLoopback } from './loopback.ts'
 import { PLUGIN_VERSION } from './version.ts'
@@ -71,6 +72,8 @@ export interface WorkBuddyStatusRouteOptions {
   regions: readonly WorkBuddyRegionView[]
   /** Credentials currently stored, newest selection first is not required. */
   credentials?: () => Promise<readonly WorkBuddyCredential[]>
+  /** Disabled account uids, so each account can report its own state. */
+  disabled?: () => Promise<ReadonlySet<string>>
   /** The in-process control key handed to the card. */
   controlKey: string
   /** Clock, injectable for tests. */
@@ -78,12 +81,16 @@ export interface WorkBuddyStatusRouteOptions {
 }
 
 /** Accounts, grouped by region, as the card displays them. */
-function accountViews(credentials: readonly WorkBuddyCredential[]): readonly WorkBuddyWebAccount[] {
+function accountViews(
+  credentials: readonly WorkBuddyCredential[],
+  disabled: ReadonlySet<string>,
+): readonly WorkBuddyWebAccount[] {
   return credentials.map(credential => ({
     uid: credential.uid,
     label: displayNameOf(credential),
     region: credential.region,
     expiresAtMs: credential.expiresAtMs,
+    enabled: !disabled.has(credential.uid),
   }))
 }
 
@@ -125,11 +132,12 @@ function regionView(
 /** Assemble the document. */
 export async function workBuddyWebStatus(options: WorkBuddyStatusRouteOptions): Promise<WorkBuddyWebStatus> {
   const credentials = await (options.credentials ?? listCredentials)()
+  const disabled = await (options.disabled ?? disabledUids)()
   const signedInRegions = new Set(credentials.map(credential => credential.region))
   return {
     status: 'ok',
     version: PLUGIN_VERSION,
-    accounts: accountViews(credentials),
+    accounts: accountViews(credentials, disabled),
     regions: options.regions.map(view => regionView(view, signedInRegions.has(view.region))),
     controlKey: options.controlKey,
   }

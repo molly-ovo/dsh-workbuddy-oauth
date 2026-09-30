@@ -50,15 +50,38 @@ describe('workBuddyWebStatus', () => {
     expect(document.controlKey).toBe('k')
   })
 
-  it('lists accounts with label, region, and expiry', async () => {
+  it('lists accounts with label, region, expiry, and enabled state', async () => {
     const document = await workBuddyWebStatus({
       regions: [],
       controlKey: 'k',
       credentials: async () => [credential({ nickname: '爱在', expiresAtMs: 1234 })],
     })
     expect(document.accounts).toEqual([
-      { uid: 'uid-1', label: '爱在', region: 'cn', expiresAtMs: 1234 },
+      { uid: 'uid-1', label: '爱在', region: 'cn', expiresAtMs: 1234, enabled: true },
     ])
+  })
+
+  it('reports a disabled account as still listed but not enabled', async () => {
+    // Disabling is not signing out: the credential file stays, so the card must
+    // keep showing the row (it is still an account) while marking it unusable.
+    const document = await workBuddyWebStatus({
+      regions: [],
+      controlKey: 'k',
+      credentials: async () => [credential({ nickname: '爱在' })],
+      disabled: async () => new Set(['uid-1']),
+    })
+    expect(document.accounts[0]?.enabled).toBe(false)
+    expect(document.accounts[0]?.label).toBe('爱在')
+  })
+
+  it('masks a phone-number nickname in the document the card renders', async () => {
+    // The card is a display surface, so it must not publish a raw mobile number.
+    const document = await workBuddyWebStatus({
+      regions: [],
+      controlKey: 'k',
+      credentials: async () => [credential({ nickname: '13800138000' })],
+    })
+    expect(document.accounts[0]?.label).toBe('138*****000')
   })
 
   it('marks a region signed in independently of its roster', async () => {

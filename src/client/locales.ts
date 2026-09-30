@@ -37,6 +37,17 @@ export type WorkBuddyLocaleKey =
   | 'models'
   | 'noModels'
   | 'refresh'
+  | 'enable'
+  | 'disable'
+  | 'enabledTag'
+  | 'disabledTag'
+  | 'logout'
+  | 'logoutConfirm'
+  | 'logoutConfirmAction'
+  | 'logoutSucceeded'
+  | 'enableSucceeded'
+  | 'disableSucceeded'
+  | 'working'
 
 export const zh: Record<WorkBuddyLocaleKey, string> = {
   title: 'WorkBuddy',
@@ -70,6 +81,17 @@ export const zh: Record<WorkBuddyLocaleKey, string> = {
   models: '{count} 个模型',
   noModels: '无可用模型',
   refresh: '刷新',
+  enable: '启用',
+  disable: '停用',
+  enabledTag: '使用中',
+  disabledTag: '已停用',
+  logout: '登出',
+  logoutConfirm: '确定登出 {label}？只删除本插件保存的凭据，不影响上游账号。',
+  logoutConfirmAction: '登出',
+  logoutSucceeded: '已登出：{label}',
+  enableSucceeded: '已启用：{label}',
+  disableSucceeded: '已停用：{label}',
+  working: '处理中…',
 }
 
 export const en: Record<WorkBuddyLocaleKey, string> = {
@@ -104,4 +126,15 @@ export const en: Record<WorkBuddyLocaleKey, string> = {
   models: '{count} models',
   noModels: 'No models available',
   refresh: 'Refresh',
+  enable: 'Enable',
+  disable: 'Disable',
+  enabledTag: 'in use',
+  disabledTag: 'disabled',
+  logout: 'Sign out',
+  logoutConfirm: 'Sign out of {label}? Only the credential stored by this plugin is deleted; the upstream account is untouched.',
+  logoutConfirmAction: 'Sign out',
+  logoutSucceeded: 'Signed out: {label}',
+  enableSucceeded: 'Enabled: {label}',
+  disableSucceeded: 'Disabled: {label}',
+  working: 'Working…',
 }

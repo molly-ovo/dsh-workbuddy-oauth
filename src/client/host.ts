@@ -58,6 +58,8 @@ export type ControlRequest =
   | { action: 'refresh' }
   | { action: 'login-begin'; region: string }
   | { action: 'login-complete'; state: string }
+  | { action: 'logout'; uid: string }
+  | { action: 'set-account-enabled'; uid: string; enabled: boolean }
 
 /**
  * POST one control action.

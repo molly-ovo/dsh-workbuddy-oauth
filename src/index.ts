@@ -39,7 +39,8 @@ import { FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, WorkBuddyCatal
 import { createWorkBuddyShim } from './shim.ts'
 import { createCredentialStore } from './store.ts'
 import { WorkBuddyUpstreamClient } from './upstream.ts'
-import { credentialFromLogin, displayNameOf, probePathFor, type WorkBuddyCredential } from './credentials.ts'
+import { credentialFromLogin, deleteCredential, displayNameOf, listCredentials, probePathFor, type WorkBuddyCredential } from './credentials.ts'
+import { setAccountDisabled } from './account-state.ts'
 import { LoginClient, LoginPendingError } from './oauth.ts'
 import { regionEndpoints, type WorkBuddyRegion } from './region.ts'
 import { saveAccount } from './store.ts'
@@ -605,6 +606,41 @@ export function apply(ctx: Context, config: Config): void {
               reason: error instanceof Error ? error.message : String(error),
             }
           }
+        },
+        /**
+         * The card's counterpart to `/wb-logout`.
+         *
+         * Deletes our own stored credential only — the upstream account is
+         * untouched — and refreshes the catalog so a group that is now empty
+         * disappears instead of offering models that can only fail.
+         */
+        logout: async (uid) => {
+          const credentials = await listCredentials()
+          const target = credentials.find(credential => credential.uid === uid)
+          if (target === undefined) return { state: 'failed', reason: 'no such account' }
+          const label = displayNameOf(target)
+          await deleteCredential(uid)
+          await Promise.all(runtimes.map((runtime) => refreshCatalog(ctx, runtime, log, 'login')))
+          ctx.emit('llm/adapters-updated')
+          return { state: 'ok', reason: label }
+        },
+        /**
+         * The card's counterpart to `/wb-account enable|disable`.
+         *
+         * Reversible, unlike {@link logout}: the credential file stays, so the
+         * account keeps its tokens and only leaves selection. The catalog is
+         * refreshed because disabling the account in use must drop the group
+         * rather than leave it serving requests that will now fail.
+         */
+        setAccountEnabled: async (uid, enabled) => {
+          const credentials = await listCredentials()
+          if (!credentials.some(credential => credential.uid === uid)) {
+            return { state: 'failed', reason: 'no such account' }
+          }
+          await setAccountDisabled(uid, !enabled)
+          await Promise.all(runtimes.map((runtime) => refreshCatalog(ctx, runtime, log, 'login')))
+          ctx.emit('llm/adapters-updated')
+          return { state: 'ok', reason: enabled ? 'enabled' : 'disabled' }
         },
       }, controlKey)
     }

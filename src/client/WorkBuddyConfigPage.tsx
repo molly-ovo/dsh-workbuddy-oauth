@@ -19,7 +19,7 @@ import { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
 import { readStatus, sendControl } from './host.ts'
 import type { WorkBuddyLocaleKey } from './locales.ts'
-import type { WorkBuddyWebStatus } from '../status-paths.ts'
+import type { WorkBuddyWebAccount, WorkBuddyWebStatus } from '../status-paths.ts'
 
 /** Props the Plugins page delivers to the bundle's configuration entry. */
 export type WorkBuddyConfigPageProps =
@@ -183,6 +183,37 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
     }
   }
 
+  /**
+   * Run one per-account control action and re-read the document.
+   *
+   * The card never mutates local state to predict the outcome: a toggle the host
+   * refused must not look applied, so the truth always comes back from the
+   * status route.
+   */
+  const runAccountAction = async (
+    body: { action: 'logout'; uid: string } | { action: 'set-account-enabled'; uid: string; enabled: boolean },
+    label: string,
+  ): Promise<void> => {
+    if (status === undefined || busy) return
+    setBusy(true)
+    setNotice(undefined)
+    try {
+      const result = await sendControl(status.regions[0]?.controlPath ?? '', status.controlKey, body)
+      if (result === undefined || result.state !== 'ok') {
+        setNotice(t('loginFailed', { reason: result?.reason ?? t('working') }))
+        return
+      }
+      setNotice(
+        body.action === 'logout'
+          ? t('logoutSucceeded', { label })
+          : t(body.enabled ? 'enableSucceeded' : 'disableSucceeded', { label }),
+      )
+      await refresh()
+    } finally {
+      if (mounted.current) setBusy(false)
+    }
+  }
+
   if (view === 'summary') return t('intro')
 
   return (
@@ -248,14 +279,80 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
               </span>
             </div>
           ))}
-          {status.accounts.length === 0 ? null : (
-            <span style={mutedStyle}>
-              {t('signedInAs', { label: status.accounts.map(account => account.label).join('、') })}
-            </span>
-          )}
+          {/*
+            One row per account, with the uid prefix visible: signing out or
+            disabling names an account by uid, so the card has to show it to be
+            usable at all.
+          */}
+          {status.accounts.map(account => (
+            <AccountRow
+              key={account.uid}
+              account={account}
+              t={t}
+              busy={busy}
+              onToggle={(enabled) => runAccountAction(
+                { action: 'set-account-enabled', uid: account.uid, enabled },
+                account.label,
+              )}
+              onLogout={() => runAccountAction({ action: 'logout', uid: account.uid }, account.label)}
+            />
+          ))}
         </div>
       )}
     </section>
+  )
+}
+
+/**
+ * One account row: identity, state, and the two management actions.
+ *
+ * Signing out is irreversible (it deletes the stored credential), so it asks for
+ * confirmation first — the command path requires typing a uid prefix, which is
+ * its own confirmation, and a bare button here would be easier to misfire than
+ * either.
+ */
+function AccountRow({ account, t, busy, onToggle, onLogout }: {
+  account: WorkBuddyWebAccount
+  t: WorkBuddyConfigPageProps['t']
+  busy: boolean
+  onToggle: (enabled: boolean) => Promise<void>
+  onLogout: () => Promise<void>
+}): ReactNode {
+  const [confirming, setConfirming] = useState(false)
+  return (
+    <div style={{ ...rowStyle, flexWrap: 'wrap' }}>
+      <span style={regionStyle}>{account.label}</span>
+      <span style={mutedStyle}>{account.uid.slice(0, 8)}</span>
+      <span style={mutedStyle}>{t(account.enabled ? 'enabledTag' : 'disabledTag')}</span>
+      <span style={{ flex: 1 }} />
+      <button
+        type="button"
+        style={buttonStyle}
+        disabled={busy}
+        onClick={() => { void onToggle(!account.enabled) }}
+      >
+        {t(account.enabled ? 'disable' : 'enable')}
+      </button>
+      {confirming ? (
+        <>
+          <button type="button" style={buttonStyle} disabled={busy} onClick={() => { setConfirming(false) }}>
+            {t('cancel')}
+          </button>
+          <button type="button" style={primaryButtonStyle} disabled={busy} onClick={() => { void onLogout() }}>
+            {t('logoutConfirmAction')}
+          </button>
+        </>
+      ) : (
+        <button type="button" style={buttonStyle} disabled={busy} onClick={() => { setConfirming(true) }}>
+          {t('logout')}
+        </button>
+      )}
+      {confirming ? (
+        <span style={{ ...mutedStyle, flexBasis: '100%' }}>
+          {t('logoutConfirm', { label: account.label })}
+        </span>
+      ) : null}
+    </div>
   )
 }
 
