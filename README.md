@@ -4,15 +4,15 @@
 
 与 [`dsh-workbuddy-connect`](https://github.com/corrinehu/dsh-workbuddy-connect) 的**根本区别**：本插件走**自己的 OAuth 设备码登录**，不读取 WorkBuddy 桌面 App 的凭据文件。
 
-> **接手本项目？先读 [`HANDOFF.md`](./HANDOFF.md)。**
+> **接手本项目？先读 [`docs/HANDOFF.md`](./docs/HANDOFF.md)。**
 > 里面有当前状态、已犯过的错、实测过的接口、排查手册与铁律。
 >
-> 文档地图：
-> - [`HANDOFF.md`](./HANDOFF.md) —— **交接（先读这个）**
-> - [`PHASES.md`](./PHASES.md) —— 阶段设计、验收标准、教训记录
-> - [`REUSE.md`](./REUSE.md) —— 可复用性审计
-> - [`RISK-CONTROL.md`](./RISK-CONTROL.md) —— 防风控设计依据
-> - [`PHASES-旧对话的phase.md`](./PHASES-旧对话的phase.md) —— 立项时的原始计划（对照用）
+> 文档地图（都在 [`docs/`](./docs/)）：
+> - [`docs/HANDOFF.md`](./docs/HANDOFF.md) —— **交接（先读这个）**
+> - [`docs/PHASES.md`](./docs/PHASES.md) —— 阶段设计、验收标准、教训记录
+> - [`docs/REUSE.md`](./docs/REUSE.md) —— 可复用性审计
+> - [`docs/RISK-CONTROL.md`](./docs/RISK-CONTROL.md) —— 防风控设计依据
+> - [`docs/PHASES-旧对话的phase.md`](./docs/PHASES-旧对话的phase.md) —— 立项时的原始计划（对照用）
 
 ---
 
@@ -38,9 +38,21 @@ connect 复用桌面 App 的登录态，因此必须：
 
 ---
 
-## 状态：P1 结构完成 / 端到端未验证
+## 状态：已完成
 
-> **重要**：P1 只声明**结构**达成。本插件原定的验收标准是「**卸载桌面端后仍能正常对话**」，该条**目前不成立**——因为登录还没有界面入口，端到端链路走不通。功能验收已移交 P2，详见 [`PHASES.md`](./PHASES.md)。
+多账号插件已完成并端到端验证。能力清单：
+
+| 能力 | 状态 |
+|---|---|
+| 自有 OAuth 登录（国内版 + 国际版） | ✅ |
+| 多账号共存、轮转选号、失败冷却、会话粘性 | ✅ |
+| 账号启停 / 登出（设置页 + 命令） | ✅ |
+| 模型显隐（可逆、按 region 持久化）+ 上下文窗口 | ✅ |
+| 推理档位手动探测 | ✅ |
+| 积分余额查询（总积分） | ✅ |
+| 设置页卡片 + composer 探测控件 | ✅ |
+
+自动化任务（签到 / 成长 / 猫猫旅行 / 保活等）**明确不做**，决策记录见 [`docs/PHASES.md`](./docs/PHASES.md) 的 P4 章节。
 
 已实现：
 
@@ -64,11 +76,11 @@ connect 复用桌面 App 的登录态，因此必须：
 | `src/status-paths.ts` `src/web-status.ts` `src/control-route.ts` | 状态文档 + 控制路由（回环 + 进程内 key） |
 | `src/client/` | 设置页卡片 + composer 探测控件（客户端 bundle） |
 
-结构验证：`tsc`（host + client）零错误；**208 个测试全部通过**；`tsdown` 构建产出 `lib/index.js`（189 KB）+ `lib/client.js`（33 KB）。
+结构验证：`tsc`（host + client）零错误；**221 个测试全部通过**；`tsdown` 构建产出 `lib/index.js`（200 KB）+ `lib/client.js`（44 KB）。
 
-防风控设计见 [`RISK-CONTROL.md`](./RISK-CONTROL.md) —— 对照同类项目的实测结论，说明每条规则借鉴自哪里。
+防风控设计见 [`docs/RISK-CONTROL.md`](./docs/RISK-CONTROL.md) —— 对照同类项目的实测结论，说明每条规则借鉴自哪里。
 
-阶段划分、验收标准与当前进度见 [`PHASES.md`](./PHASES.md)。
+阶段划分、验收标准与当前进度见 [`docs/PHASES.md`](./docs/PHASES.md)。
 
 ## 用法
 
@@ -85,9 +97,10 @@ connect 复用桌面 App 的登录态，因此必须：
 | 命令 | 作用 |
 |---|---|
 | `/wb-status` | 查看已登录账号、区域、令牌有效期 |
+| `/wb-account [enable|disable] <uid 前缀>` | 启用 / 停用账号 |
 | `/wb-logout [uid 前缀]` | 退出登录（只删本插件保存的凭据，不动上游账号） |
 
-**下一步（P2 剩余）**：设置页卡片 + 端到端验证。
+登录 / 状态 / 账号管理也可在**设置页卡片**里完成（Plugins 页 → 本 bundle）。
 
 ---
 
@@ -95,32 +108,28 @@ connect 复用桌面 App 的登录态，因此必须：
 
 ```
 src/
-  region.ts        区域定义（cn / global）
+  region.ts        区域定义（cn / global）+ 端点表
   oauth.ts         设备码登录
-  credentials.ts   凭据存储
+  credentials.ts   凭据存储（每账号一文件）
   refresh.ts       令牌刷新
   fingerprint.ts   设备指纹
   identity.ts      出站身份（配置驱动）
-  store.ts         凭据选择接缝
+  store.ts         凭据选择接缝（轮转 + 冷却 + 粘性）
+  account-state.ts 账号启停状态
   upstream.ts      上游客户端（移植）
   shim.ts          回环端点（移植）
   adapter.ts       provider 适配（移植）
   catalog.ts       模型目录（移植）
+  hidden-models.ts 模型显隐持久化
+  probe.ts / probe-store.ts / probe-service.ts  档位探测
+  status-paths.ts / web-status.ts / control-route.ts  状态文档 + 控制路由
   commands.ts      斜杠命令（/wb-login 等）
-  probe.ts         档位探测
-  probe-store.ts  探测记录
-  loopback.ts     回环判定
   index.ts         插件入口
-tests/
-  oauth.spec.ts          (22)
-  commands.spec.ts       (22)
-  refresh.spec.ts        (17)
-  credentials.spec.ts    (13)
-  fingerprint.spec.ts    (11)
-  store.spec.ts          (11)
-.upstream/         上游参照 clone（只读，已 gitignore）
-REUSE.md           可复用性审计
-RISK-CONTROL.md    防风控设计依据
+  client/          设置页卡片 + composer 探测控件（客户端 bundle）
+tests/              221 个测试，17 个文件
+tools/              上游诊断脚本（登录 URL、错误形状等）
+.upstream/          上游参照 clone（只读，已 gitignore）
+docs/               项目文档（HANDOFF / PHASES / REUSE / RISK-CONTROL）
 ```
 
 ---
@@ -136,7 +145,7 @@ pnpm run build
 
 ### 验证要求（不要跳过）
 
-`tests/index.spec.ts` 直接驱动 `apply()`。**这不是可选的覆盖面**——本插件装上后曾因装配顺序错误而完全无法激活（详见 [`PHASES.md`](./PHASES.md) 的教训 L1）。
+`tests/index.spec.ts` 直接驱动 `apply()`。**这不是可选的覆盖面**——本插件装上后曾因装配顺序错误而完全无法激活（详见 [`docs/PHASES.md`](./docs/PHASES.md) 的教训 L1）。
 
 | 层次 | 是否足够 |
 |---|---|
@@ -179,7 +188,7 @@ pnpm run build
 | 对外暴露 HTTP 端口 | 无此需求；回环端点只绑 `127.0.0.1` |
 | 会话复制 / 账号切换 | 那是 switch 类工具（如 `changexbc/workbuddy-switch`）的领域 |
 
-完整清单与阶段划分见 [`PHASES.md`](./PHASES.md)。
+完整清单与阶段划分见 [`docs/PHASES.md`](./docs/PHASES.md)。
 
 ---
 

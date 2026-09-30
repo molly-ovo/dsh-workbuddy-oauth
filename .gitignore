@@ -1,7 +1,27 @@
+# 依赖
 node_modules/
+
+# 构建产物（tsdown 输出到 lib/，`dist/` 留作其它工具兜底）
 lib/
 dist/
+
+# 测试覆盖率（vitest 尚未开 coverage，先占位）
+coverage/
+
+# 增量编译缓存
+*.tsbuildinfo
+
+# 日志
 *.log
+
+# 编辑器 / IDE
+.idea/
+.vscode/
+*.swp
+
+# 系统垃圾文件
+Thumbs.db
+.DS_Store
 
 # 上游参照 clone —— 只读参考，不随仓库分发
 .upstream/
