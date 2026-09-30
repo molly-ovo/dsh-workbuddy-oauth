@@ -30,4 +30,18 @@ describe('cooldownForKind', () => {
     // hide it from selection until the timer ran out, then retry and fail again.
     expect(cooldownForKind('session_dead', 1000)).toBeUndefined()
   })
+
+  it('parks an exhausted account for an hour, not a minute', () => {
+    // Credit does not return by waiting: the upstream answers 额度已用尽 and
+    // offers a top-up purchase. A one-minute cooldown put the dead account back
+    // into rotation every minute, burning a failing request each time. The
+    // durations must differ by an order of magnitude because the causes do.
+    expect(FAILURE_COOLDOWN_MS.hard_credit).toBe(60 * 60_000)
+    expect(FAILURE_COOLDOWN_MS.hard_credit).toBeGreaterThan(FAILURE_COOLDOWN_MS.soft_rate * 10)
+  })
+
+  it('keeps a rate limit short, since it clears on its own', () => {
+    expect(FAILURE_COOLDOWN_MS.soft_rate).toBe(60_000)
+    expect(FAILURE_COOLDOWN_MS.server).toBe(10_000)
+  })
 })

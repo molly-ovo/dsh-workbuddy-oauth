@@ -26,14 +26,21 @@ import { extractDisplayErrorMessage, prepareChatBody, WorkBuddyUpstreamClient, t
 /**
  * How long an upstream failure parks an account out of selection.
  *
- * Deliberately coarse and small — the point is to stop the *next* request from
- * immediately retrying the account that just failed, not to implement a full
- * circuit breaker. The reference implementations' defaults (hub `cooldown=60`,
- * panel `soft_rate=600`) are far longer because they serve concurrent clients;
- * a personal install just needs the account out of the way briefly.
+ * The two durations differ by an order of magnitude because the *cause* differs:
+ *
+ * - `hard_credit` means the account is out of credit. That does not clear in a
+ *   minute — measured, the upstream answers `额度已用尽` and offers a top-up
+ *   purchase link — so a short cooldown would put the account back in rotation
+ *   and burn a failing request every interval. One hour is a compromise between
+ *   "do not retry a dead account" and "notice automatically if credit returns";
+ *   the user can also re-enable or sign in again explicitly.
+ * - `soft_rate` means "too fast": the upstream's own limit resets on its own, so
+ *   a short park is enough to stop the next request from hitting the same wall.
+ *
+ * `server` (5xx) is transient by nature, hence the shortest.
  */
 export const FAILURE_COOLDOWN_MS: Readonly<Record<'hard_credit' | 'soft_rate' | 'server', number>> = {
-  hard_credit: 60_000,
+  hard_credit: 60 * 60_000,
   soft_rate: 60_000,
   server: 10_000,
 }

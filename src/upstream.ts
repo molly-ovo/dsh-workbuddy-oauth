@@ -193,13 +193,35 @@ const CLIENT_UA = 'CLI/2.63.2 CodeBuddy/2.63.2'
 const JSON_TIMEOUT_MS = 30_000
 const ERROR_BODY_LIMIT = 4096
 
-/** Insufficient-credit markers, ASCII lowercase plus the original Chinese. */
+/**
+ * Insufficient-credit markers, ASCII lowercase plus the original Chinese.
+ *
+ * Measured 2026-09-30 on a genuinely exhausted CN account: the upstream answers
+ * **HTTP 429** with `{"error":{"data":{"code":14018,"msg":"额度已用尽，…购买加量包…"}}}`
+ * — not a 402, and the wording is 「额度**已**用尽」, which the earlier list
+ * (「额度用尽」) did not match, so exhaustion was being classified as `soft_rate`
+ * (transient rate limiting) instead of `hard_credit` (out of credit). Both the
+ * marker set and the classification order account for that.
+ */
 const HARD_CREDIT_MARKERS: readonly string[] = [
   'insufficient credit', 'no credit', 'credit exhausted', 'credits exhausted', 'out of credit',
   'quota exceeded', 'quota exhaust', 'payment required', 'credit not enough',
   'not enough credit',
-  '积分不足', '额度不足', '余额不足', '积分用完', '额度用尽', '没有积分',
+  // The messages the upstream actually sends, including the 14018 exhaustion
+  // body ("额度已用尽，请…购买加量包"); 「已」 variants are listed explicitly
+  // because they are separate strings, not substrings of the plain form.
+  '额度已用尽', '额度已用完', '额度用尽', '额度不足', '额度已不足',
+  '积分不足', '积分已用完', '积分用完', '余额不足', '没有积分',
 ]
+
+/**
+ * Upstream business codes that mean "out of credit" whatever the HTTP status.
+ *
+ * `14018` is the measured exhaustion code ("额度已用尽"). It travels inside a
+ * nested `error.data.code`, so it is matched against the body text like the
+ * markers rather than parsed out — the body is already the classifier's input.
+ */
+const HARD_CREDIT_CODES: readonly string[] = ['14018']
 
 /** The concrete effort spellings WorkBuddy exposes on the wire. */
 const EFFORT_VALUES: readonly WorkBuddyEffort[] = ['low', 'medium', 'high', 'xhigh', 'max']
@@ -311,7 +333,16 @@ function resolveUpstreamBilling(
 /** Session-invalidation markers that mean "sign in again in the WorkBuddy app". */
 const SESSION_DEAD_MARKERS: readonly string[] = ['Offline user session not found', '12153']
 
-/** Classify an upstream failure from its HTTP status and body excerpt. */
+/**
+ * Classify an upstream failure from its HTTP status and body excerpt.
+ *
+ * **Credit is checked before the status-code fallbacks, deliberately.** The
+ * upstream reports an exhausted account as HTTP 429 with code 14018, and 429
+ * otherwise means rate limiting — but "no credit" is permanent until the user
+ * pays, while "slow down" clears on its own. Treating the former as the latter
+ * makes the pool retry a dead account forever. The body markers are therefore
+ * consulted for every status, not only after 402.
+ */
 export function classifyUpstreamError(status: number, body: string): UpstreamErrorKind {
   if (status === 402) return 'hard_credit'
   // A 401 is an auth failure whatever its body says: there is no business
@@ -323,6 +354,9 @@ export function classifyUpstreamError(status: number, body: string): UpstreamErr
   const lower = body.toLowerCase()
   for (const marker of HARD_CREDIT_MARKERS) {
     if (lower.includes(marker.toLowerCase()) || body.includes(marker)) return 'hard_credit'
+  }
+  for (const code of HARD_CREDIT_CODES) {
+    if (body.includes(code)) return 'hard_credit'
   }
   for (const marker of SESSION_DEAD_MARKERS) {
     if (body.includes(marker)) return 'session_dead'
