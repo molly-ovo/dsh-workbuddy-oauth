@@ -40,7 +40,6 @@ import {
   type WorkBuddyCredential,
 } from './credentials.ts'
 import { disabledUids, setAccountDisabled } from './account-state.ts'
-import type { GrowthStatusEntry, GrowthSweepEntry } from './growth-scheduler.ts'
 import { LoginClient, LoginExpiredError, LoginPendingError, parseRegionInput } from './oauth.ts'
 import { regionEndpoints, type WorkBuddyRegion } from './region.ts'
 import { PLUGIN_VERSION } from './version.ts'
@@ -147,18 +146,6 @@ export interface CommandDeps {
   complete: (state: string) => Promise<{ uid: string; label: string }>
   /** Ask the user something, or `undefined` when no UI service is available. */
   userQuestions: UserQuestionsService | undefined
-  /**
-   * Growth automation, injected by the plugin.
-   *
-   * The plugin owns the client, the scheduler state and the credential list, so
-   * the command only renders what it is handed — the same division `complete`
-   * follows for sign-in. Absent means the plugin did not wire it, and the command
-   * reports that rather than silently doing nothing.
-   */
-  growth?: {
-    status: () => Promise<readonly GrowthStatusEntry[]>
-    run: (force: boolean) => Promise<readonly GrowthSweepEntry[]>
-  }
   /** Plugin logging surface. */
   warn: (message: string, error?: unknown) => void
 }
@@ -466,91 +453,7 @@ export function registerCommands(
     }),
   )
 
-  /** `/wb-task [run]` — the CN growth center: status, or one pass now. */
-  disposers.push(
-    commands.register({
-      name: 'wb-task',
-      description: 'WorkBuddy 任务中心（签到 / 猫猫旅行 / 连登兑换 / 抽奖 / 领取已完成任务）',
-      input: { hint: '[run | status]' },
-      handler: async ({ rawInput }): Promise<CommandResult> => {
-        const growth = deps.growth
-        if (growth === undefined) {
-          return { kind: 'error', text: '任务中心未接入（插件未提供 growth 实现）。' }
-        }
-        const verb = rawInput.trim().split(/\s+/)[0] ?? ''
-        if (verb !== '' && verb !== 'run' && verb !== 'status') {
-          return {
-            kind: 'error',
-            text: `无法识别动作「${verb}」。用法：/wb-task（查看状态）｜/wb-task run（立即执行一次）`,
-          }
-        }
-        if (verb === 'run') {
-          // `force` because a manual request must not be suppressed by the daily
-          // bookkeeping — the user asking is a stronger signal than the schedule.
-          const entries = await growth.run(true)
-          return { kind: 'success', text: [`WorkBuddy 任务中心 · 本次执行`, '', renderGrowthRun(entries)].join('\n') }
-        }
-        const entries = await growth.status()
-        return {
-          kind: 'success',
-          text: [
-            'WorkBuddy 任务中心（国内版）',
-            '',
-            renderGrowthStatus(entries),
-            '',
-            '说明：只走真实端点（签到 / 旅行 / 连登 / 抽奖 / 领取你真实完成的任务），不伪造客户端事件。',
-            '每日 9 点与 21 点自动执行；用 /wb-task run 可立即执行。',
-          ].join('\n'),
-        }
-      },
-    }),
-  )
-
   return disposers
-}
-
-/**
- * Render one growth status view.
- *
- * Deliberately counts what the user can act on: how many tasks are claimable now,
- * and why the daily pass has not run. Endpoint failures are shown per account, not
- * collapsed into one error line.
- */
-function renderGrowthStatus(entries: readonly GrowthStatusEntry[]): string {
-  if (entries.length === 0) return '没有启用中的国内版账号（国际版没有任务中心）。'
-  const blocks = entries.map((entry) => {
-    const header = `【${entry.label}】uid=${entry.uid.slice(0, 8)}`
-    if (entry.view === undefined) {
-      return [header, `  ⚠ 读取失败：${entry.error ?? '未知原因'}`].join('\n')
-    }
-    const view = entry.view
-    const claimable = view.tasks.filter(task => task.target > 0 && task.current >= task.target
-      && task.acceptStatus !== 'claimed')
-    const pending = view.tasks.filter(task => task.acceptStatus === 'not_accepted' && !task.locked)
-    const ready = view.tiers.filter(tier => tier.status === 'ready')
-    return [
-      header,
-      `  任务：${view.tasks.length} 个｜现在可领 ${claimable.length} 个｜待桌面端操作 ${pending.length} 个`,
-      `  连登：${view.streakDays} 天｜可兑换档位 ${ready.length} 个｜补签卡 ${view.makeupCards}`,
-      `  猫猫：${view.travel.state}${view.travel.dailyLimitReached ? '（今日已出行）' : ''}`,
-      `  抽奖：${view.lotteryChances} 次｜能量：${view.energyBalance}`,
-      `  今日自动任务：${entry.due.due ? '待执行' : entry.due.reason}`,
-    ].join('\n')
-  })
-  return blocks.join('\n\n')
-}
-
-/** Render one sweep outcome. */
-function renderGrowthRun(entries: readonly GrowthSweepEntry[]): string {
-  if (entries.length === 0) return '没有启用中的国内版账号（国际版没有任务中心）。'
-  const blocks = entries.map((entry) => {
-    if (!entry.ran) return `【${entry.label}】跳过：${entry.reason}`
-    if (entry.error !== undefined) return `【${entry.label}】执行异常：${entry.error}`
-    const result = entry.result
-    if (result === undefined) return `【${entry.label}】无结果`
-    return [`【${entry.label}】`, ...result.lines.map(line => `  ${line}`)].join('\n')
-  })
-  return blocks.join('\n\n')
 }
 
 /** Create the login client used by the commands. Exported for tests. */

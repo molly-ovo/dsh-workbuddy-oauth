@@ -113,17 +113,17 @@ function deps(overrides: Record<string, unknown> = {}) {
 }
 
 describe('registration', () => {
-  it('registers the five commands', () => {
+  it('registers the four commands', () => {
     const { ctx, definitions } = fakeContext()
     registerCommands(ctx, fakeLogins() as never, deps() as never)
 
-    expect([...definitions.keys()].sort()).toEqual(['wb-account', 'wb-login', 'wb-logout', 'wb-status', 'wb-task'])
+    expect([...definitions.keys()].sort()).toEqual(['wb-account', 'wb-login', 'wb-logout', 'wb-status'])
   })
 
   it('returns disposers that unregister', () => {
     const { ctx, definitions } = fakeContext()
     const disposers = registerCommands(ctx, fakeLogins() as never, deps() as never)
-    expect(definitions.size).toBe(5)
+    expect(definitions.size).toBe(4)
     for (const dispose of disposers) dispose()
     expect(definitions.size).toBe(0)
   })
@@ -440,97 +440,5 @@ describe('/wb-account', () => {
     const result = await run(definitions, 'wb-account', 'disable zzz')
     expect(result.kind).toBe('error')
     expect(result.text).toContain('没有匹配')
-  })
-})
-
-describe('/wb-task', () => {
-  /** A growth stub: the command only calls `status` and `run`. */
-  function growthDeps(overrides: Record<string, unknown> = {}) {
-    return deps({
-      growth: {
-        status: vi.fn(async () => []),
-        run: vi.fn(async () => []),
-        ...overrides,
-      },
-    })
-  }
-
-  it('says so when the plugin did not wire the growth layer', async () => {
-    // A missing dependency must be visible, not silently do nothing.
-    const { ctx, definitions } = fakeContext()
-    registerCommands(ctx, fakeLogins() as never, deps() as never)
-
-    const result = await run(definitions, 'wb-task')
-    expect(result.kind).toBe('error')
-    expect(result.text).toContain('未接入')
-  })
-
-  it('renders per-account status with the counts the user can act on', async () => {
-    const { ctx, definitions } = fakeContext()
-    registerCommands(ctx, fakeLogins() as never, growthDeps({
-      status: vi.fn(async () => [{
-        uid: 'uid-a1b2c3d4', label: '号一', due: { due: false, reason: '今日已完成' },
-        view: {
-          tasks: [
-            { code: 'chat_5', title: '对话', description: '', jumpUrl: '', acceptStatus: 'accepted', current: 5, target: 5, rewardCredit: 100, rewardEnergy: 0, locked: false },
-            { code: 'canvas', title: '画布', description: '', jumpUrl: '', acceptStatus: 'not_accepted', current: 0, target: 1, rewardCredit: 300, rewardEnergy: 0, locked: false },
-          ],
-          streakDays: 3, makeupCards: 1,
-          tiers: [{ tier: '7d', days: 7, credit: 0, energy: 2, cards: 1, chances: 1, status: 'ready' }],
-          lotteryChances: 2,
-          travel: { state: 'arrived', dailyLimitReached: false, rewardCredit: 9 },
-          energyBalance: 5,
-        },
-      }]),
-    }) as never)
-
-    const result = await run(definitions, 'wb-task')
-    expect(result.kind).toBe('success')
-    expect(result.text).toContain('uid-a1b2')
-    expect(result.text).toContain('现在可领 1 个')
-    expect(result.text).toContain('待桌面端操作 1 个')
-    expect(result.text).toContain('连登：3 天')
-    expect(result.text).toContain('可兑换档位 1 个')
-    expect(result.text).toContain('今日已完成')
-    // The scope promise is stated where the user reads it.
-    expect(result.text).toContain('不伪造客户端事件')
-  })
-
-  it('runs a forced pass and prints each account line', async () => {
-    const runSpy = vi.fn(async () => [{
-      uid: 'uid-a1b2c3d4', label: '号一', ran: true, reason: '手动触发',
-      result: { uid: 'uid-a1b2c3d4', label: '号一', ok: true, credit: 9, energy: 0, checkedIn: true, lines: ['✓ 今日签到已完成', '🐱 猫猫归来领奖 +9 积分'] },
-    }])
-    const { ctx, definitions } = fakeContext()
-    registerCommands(ctx, fakeLogins() as never, growthDeps({ run: runSpy }) as never)
-
-    const result = await run(definitions, 'wb-task', 'run')
-    expect(result.kind).toBe('success')
-    // A manual request must bypass the daily bookkeeping.
-    expect(runSpy).toHaveBeenCalledWith(true)
-    expect(result.text).toContain('猫猫归来领奖 +9 积分')
-  })
-
-  it('renders a skipped and a failed account distinctly', async () => {
-    const { ctx, definitions } = fakeContext()
-    registerCommands(ctx, fakeLogins() as never, growthDeps({
-      run: vi.fn(async () => [
-        { uid: 'uid-a', label: '号一', ran: false, reason: '今日已完成' },
-        { uid: 'uid-b', label: '号二', ran: true, reason: '到期执行', error: 'upstream exploded' },
-      ]),
-    }) as never)
-
-    const result = await run(definitions, 'wb-task', 'run')
-    expect(result.text).toContain('号一】跳过：今日已完成')
-    expect(result.text).toContain('号二】执行异常：upstream exploded')
-  })
-
-  it('rejects an unrecognized verb', async () => {
-    const { ctx, definitions } = fakeContext()
-    registerCommands(ctx, fakeLogins() as never, growthDeps() as never)
-
-    const result = await run(definitions, 'wb-task', 'explode')
-    expect(result.kind).toBe('error')
-    expect(result.text).toContain('无法识别动作')
   })
 })

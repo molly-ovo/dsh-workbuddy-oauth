@@ -51,8 +51,6 @@ import { WorkBuddyProbeStore } from './probe-store.ts'
 import { WorkBuddyProbeService } from './probe-service.ts'
 import { createControlKey, registerWorkBuddyControlRoute } from './control-route.ts'
 import { registerWorkBuddyStatusRoute } from './web-status.ts'
-import { GrowthClient } from './growth.ts'
-import { readGrowthStatus, runGrowthSweep } from './growth-scheduler.ts'
 import { controlPathFor } from './status-paths.ts'
 
 export { PLUGIN_VERSION } from './version.ts'
@@ -156,25 +154,13 @@ export interface Config {
   cliVersion?: string
   /** Region to sign in to when no argument is given. */
   region?: string
-  /**
-   * Run the daily task-center pass automatically (09:00 and 21:00 local).
-   *
-   * Defaults to on, because automating the daily rewards is the point of the
-   * feature; turn it off to keep every upstream call manual (`/wb-task run`).
-   * Only CN accounts are touched — the international realm has no growth center.
-   */
-  autoTasks?: boolean
 }
 
 export const Config: z<Config> = z.object({
   appVersion: z.string().default(''),
   cliVersion: z.string().default(''),
   region: z.string().default('cn'),
-  autoTasks: z.boolean().default(true),
 })
-
-/** How often the daily-task timer wakes to ask whether anything is due. */
-export const GROWTH_TICK_MS = 15 * 60_000
 
 /** One region's live runtime. */
 interface RegionRuntime {
@@ -378,14 +364,6 @@ export function apply(ctx: Context, config: Config): void {
    */
   const logins = new LoginClient()
 
-  /**
-   * The CN growth-center client, shared by the command and the daily timer.
-   *
-   * One instance so the risk-control pacing between upstream calls is global:
-   * two clients would each keep their own gap and double the request rate.
-   */
-  const growth = new GrowthClient()
-
   /** Schedules outstanding, cleared on disposal. */
   const timers: NodeJS.Timeout[] = []
   let stopped = false
@@ -545,45 +523,10 @@ export function apply(ctx: Context, config: Config): void {
   const commandDisposers = registerCommands(ctx, logins, {
     complete: completeLogin,
     userQuestions: ctx.get('userQuestions') as UserQuestionsService | undefined,
-    growth: {
-      status: () => readGrowthStatus({ client: growth }),
-      run: (force: boolean) => runGrowthSweep({ client: growth, force }),
-    },
     warn: (message, error) => {
       ctx.logger.warn(`dsh-workbuddy-standalone: ${message}`, error)
     },
   })
-
-  /**
-   * The daily task-center pass.
-   *
-   * An in-process timer rather than the harness scheduler: `dsh-schedule`
-   * delivers a prompt to a Session, which would spend model tokens to make a
-   * check-in call. The tick is short and cheap; `runGrowthSweep` itself decides
-   * whether anything is due, and every write it makes is idempotent upstream, so
-   * a duplicate tick costs nothing.
-   */
-  if (config.autoTasks !== false) {
-    const sweep = setInterval(() => {
-      if (stopped) return
-      void runGrowthSweep({ client: growth })
-        .then((entries) => {
-          for (const entry of entries) {
-            if (!entry.ran) continue
-            const summary = entry.result === undefined
-              ? `执行异常：${entry.error ?? '未知'}`
-              : `+${entry.result.credit} 积分 +${entry.result.energy} 能量`
-            ctx.logger.info(`dsh-workbuddy-standalone: 每日任务 [${entry.label}] ${summary}`)
-          }
-        })
-        .catch((error: unknown) => {
-          ctx.logger.warn('dsh-workbuddy-standalone: 每日任务执行失败', error)
-        })
-    }, GROWTH_TICK_MS)
-    // Do not hold the process open for a maintenance timer.
-    sweep.unref?.()
-    timers.push(sweep)
-  }
 
   /**
    * Same-origin routes backing the settings card and the probe control.

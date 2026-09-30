@@ -48,6 +48,8 @@ const introStyle: CSSProperties = {
 const rowStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }
 const regionStyle: CSSProperties = { fontSize: 12, color: 'var(--dsw-alias-label-primary)' }
 const mutedStyle: CSSProperties = { fontSize: 12, color: 'var(--dsw-alias-label-tertiary)' }
+/** Success state, so "signed in" reads differently from a neutral label. */
+const signedInStyle: CSSProperties = { fontSize: 12, color: 'var(--dsw-alias-state-success-primary)' }
 const buttonStyle: CSSProperties = {
   padding: '3px 10px',
   border: '1px solid var(--dsw-alias-border-l2)',
@@ -76,7 +78,9 @@ const noticeStyle: CSSProperties = {
   color: 'var(--dsw-alias-label-primary)',
   wordBreak: 'break-all',
 }
-const linkStyle: CSSProperties = { color: 'var(--dsw-alias-label-link, #3b82f6)', fontSize: 12 }
+// `brand-primary`, not `label-link`: the latter is not one of the theme's tokens,
+// so the link colour depended on a hard-coded fallback instead of the theme.
+const linkStyle: CSSProperties = { color: 'var(--dsw-alias-brand-primary)', fontSize: 12 }
 
 /** One in-flight sign-in the card is waiting on. */
 interface PendingLogin {
@@ -105,7 +109,14 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
   const [pending, setPending] = useState<PendingLogin>()
   const [notice, setNotice] = useState<string>()
   const [busy, setBusy] = useState(false)
+  const [checking, setChecking] = useState(false)
   const mounted = useRef(false)
+  /**
+   * Guards the completion call so the button and the polling loop cannot both be
+   * in flight: redeeming the same state twice would race, and the loser can only
+   * report a failure for a sign-in that actually succeeded.
+   */
+  const completing = useRef(false)
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const value = await readStatus(signal)
@@ -125,21 +136,23 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
   }, [refresh])
 
   /**
-   * Poll the host while an authorization is outstanding.
+   * Ask the host whether the upstream accepted the authorization.
    *
-   * The upstream does not report the user's browser approval to us; the host
-   * finds out by redeeming the state, so the card has to ask. `pending` is the
-   * normal in-between answer and is not an error.
+   * The upstream does not report the browser approval to us; the host finds out
+   * by redeeming the state, so this is a question, and `pending` is a normal
+   * in-between answer rather than an error. Both the button and the polling loop
+   * call it, and `completing` keeps them from overlapping.
    */
-  useEffect(() => {
-    if (pending === undefined || status === undefined) return
-    let cancelled = false
-    const tick = async (): Promise<void> => {
+  const checkLogin = useCallback(async (state: string): Promise<void> => {
+    if (status === undefined || completing.current) return
+    completing.current = true
+    if (mounted.current) setChecking(true)
+    try {
       const result = await sendControl(status.regions[0]?.controlPath ?? '', status.controlKey, {
         action: 'login-complete',
-        state: pending.state,
+        state,
       })
-      if (cancelled || !mounted.current) return
+      if (!mounted.current) return
       if (result === undefined) {
         setPending(undefined)
         setNotice(t('loginFailed', { reason: 'control route unreachable' }))
@@ -148,21 +161,33 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
       if (result.state === 'ok') {
         setPending(undefined)
         setNotice(t('loginSucceeded', { label: result.reason ?? '' }))
-        void refresh()
+        await refresh()
         return
       }
       if (result.state === 'failed') {
         setPending(undefined)
         setNotice(t('loginFailed', { reason: result.reason ?? '' }))
       }
+      // `pending` keeps waiting: the user may not have finished in the browser.
+    } finally {
+      completing.current = false
+      if (mounted.current) setChecking(false)
     }
-    const timer = window.setInterval(() => { void tick() }, LOGIN_POLL_MS)
-    void tick()
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [pending, status, t, refresh])
+  }, [status, t, refresh])
+
+  /**
+   * Keep asking while a sign-in is outstanding.
+   *
+   * The explicit confirm button is the primary affordance, but polling means the
+   * card also settles on its own if the user closes the browser tab and comes
+   * back — a stuck "waiting" state would be worse than a redundant request.
+   */
+  useEffect(() => {
+    if (pending === undefined || status === undefined) return
+    const timer = window.setInterval(() => { void checkLogin(pending.state) }, LOGIN_POLL_MS)
+    void checkLogin(pending.state)
+    return () => { window.clearInterval(timer) }
+  }, [pending, status, checkLogin])
 
   const startLogin = async (region: string): Promise<void> => {
     if (status === undefined || busy) return
@@ -234,9 +259,18 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
             {' '}
             {t('loginWaiting')}
           </span>
+          <button
+            type="button"
+            style={primaryButtonStyle}
+            disabled={checking}
+            onClick={() => { void checkLogin(pending.state) }}
+          >
+            {checking ? t('loginChecking') : t('loginConfirm')}
+          </button>
           <button type="button" style={buttonStyle} onClick={() => { setPending(undefined) }}>
             {t('cancel')}
           </button>
+          <span style={{ ...mutedStyle, flexBasis: '100%' }}>{t('loginConfirmHint')}</span>
         </span>
       )}
 
@@ -269,12 +303,24 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
 
       {status === undefined ? null : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {/*
+            The sign-in state is the first thing the card has to answer, so it
+            gets its own line rather than being inferred from a model count.
+          */}
+          <div style={rowStyle}>
+            <span style={regionStyle}>{t('loginState')}</span>
+            <span style={status.accounts.length === 0 ? mutedStyle : signedInStyle}>
+              {status.accounts.length === 0
+                ? t('noAccounts')
+                : t('accountCount', { count: status.accounts.length })}
+            </span>
+          </div>
           {status.regions.map(region => (
             <div key={region.region} style={rowStyle}>
               <span style={regionStyle}>{region.label}</span>
-              <span style={mutedStyle}>
+              <span style={region.signedIn ? signedInStyle : mutedStyle}>
                 {region.signedIn
-                  ? t('models', { count: region.models.length })
+                  ? t('signedInWithModels', { count: region.models.length })
                   : t('signedOut')}
               </span>
             </div>

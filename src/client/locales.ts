@@ -32,8 +32,15 @@ export type WorkBuddyLocaleKey =
   | 'loginOpenLink'
   | 'loginWaiting'
   | 'loginRetry'
+  | 'loginConfirm'
+  | 'loginChecking'
+  | 'loginConfirmHint'
   | 'loginSucceeded'
   | 'loginFailed'
+  | 'loginState'
+  | 'noAccounts'
+  | 'accountCount'
+  | 'signedInWithModels'
   | 'models'
   | 'noModels'
   | 'refresh'
@@ -74,10 +81,17 @@ export const zh: Record<WorkBuddyLocaleKey, string> = {
   login: '登录',
   loginStarting: '正在获取授权链接…',
   loginOpenLink: '请在浏览器中打开以下链接完成授权：',
-  loginWaiting: '已打开链接，等待上游确认…',
+  loginWaiting: '已打开链接。在浏览器里完成登录后，点右侧按钮确认。',
   loginRetry: '重新获取链接',
+  loginConfirm: '我已完成登录',
+  loginChecking: '正在确认…',
+  loginConfirmHint: '若点击后仍显示未登录，请确认浏览器里已看到登录成功，再点一次或重新获取链接。',
   loginSucceeded: '登录成功：{label}',
   loginFailed: '登录失败：{reason}',
+  loginState: '登录状态',
+  noAccounts: '尚未登录任何账号',
+  accountCount: '已登录 {count} 个账号',
+  signedInWithModels: '已登录 · {count} 个模型',
   models: '{count} 个模型',
   noModels: '无可用模型',
   refresh: '刷新',
@@ -119,10 +133,17 @@ export const en: Record<WorkBuddyLocaleKey, string> = {
   login: 'Sign in',
   loginStarting: 'Requesting an authorization link…',
   loginOpenLink: 'Open this link in your browser to authorize:',
-  loginWaiting: 'Link opened. Waiting for the upstream to confirm…',
+  loginWaiting: 'Link opened. After signing in there, press the button to confirm.',
   loginRetry: 'Get a new link',
+  loginConfirm: 'I have signed in',
+  loginChecking: 'Checking…',
+  loginConfirmHint: 'If it still shows as signed out, make sure the browser showed success, then press again or request a new link.',
   loginSucceeded: 'Signed in: {label}',
   loginFailed: 'Sign-in failed: {reason}',
+  loginState: 'Sign-in state',
+  noAccounts: 'No account signed in',
+  accountCount: '{count} account(s) signed in',
+  signedInWithModels: 'Signed in · {count} models',
   models: '{count} models',
   noModels: 'No models available',
   refresh: 'Refresh',
