@@ -64,7 +64,7 @@ connect 复用桌面 App 的登录态，因此必须：
 | `src/status-paths.ts` `src/web-status.ts` `src/control-route.ts` | 状态文档 + 控制路由（回环 + 进程内 key） |
 | `src/client/` | 设置页卡片 + composer 探测控件（客户端 bundle） |
 
-结构验证：`tsc`（host + client）零错误；**195 个测试全部通过**；`tsdown` 构建产出 `lib/index.js`（188 KB）+ `lib/client.js`（33 KB）。
+结构验证：`tsc`（host + client）零错误；**208 个测试全部通过**；`tsdown` 构建产出 `lib/index.js`（189 KB）+ `lib/client.js`（33 KB）。
 
 防风控设计见 [`RISK-CONTROL.md`](./RISK-CONTROL.md) —— 对照同类项目的实测结论，说明每条规则借鉴自哪里。
 

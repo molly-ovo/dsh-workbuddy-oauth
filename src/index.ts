@@ -65,6 +65,7 @@ export {
 export { LoginClient, LoginPendingError, LoginExpiredError, parseRegionInput } from './oauth.ts'
 export { ALL_REGIONS, regionEndpoints, regionOfDomain, type WorkBuddyRegion } from './region.ts'
 export { createCredentialStore, chooseRotating, NotSignedInError } from './store.ts'
+export { COOLDOWN_STATE_FILENAME, readCooldowns, writeCooldown } from './cooldown-state.ts'
 export { createWorkBuddyAdapter } from './adapter.ts'
 export { createWorkBuddyShim } from './shim.ts'
 export { FALLBACK_WORKBUDDY_MODELS, FALLBACK_WORKBUDDY_AI_MODELS, WorkBuddyCatalog } from './catalog.ts'

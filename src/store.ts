@@ -37,6 +37,7 @@ import {
   type WorkBuddyCredential,
 } from './credentials.ts'
 import { disabledUids } from './account-state.ts'
+import { readCooldowns, writeCooldown } from './cooldown-state.ts'
 import type { WorkBuddyRegion } from './region.ts'
 import { refreshCredential, needsRefresh } from './refresh.ts'
 
@@ -155,15 +156,27 @@ export function createCredentialStore(options: CredentialStoreOptions = {}): Cre
   const region = options.region
 
   // Rotation state and failure cooldowns. Both are per-instance (and therefore
-  // per-region, because each region builds its own store) and in-memory: a
-  // restart forgets them, which is acceptable for a personal install — the
-  // rotation simply restarts from the first account, and a cooled account is
-  // tried again. Persistent pool state is a later phase (P3.7).
+  // per-region, because each region builds its own store). The cooldown map is
+  // write-through persisted (see ./cooldown-state.ts): a restart must not
+  // resurrect an account that just exhausted its credit, because the failure it
+  // would hit is exactly the one the cooldown exists to avoid. The rotation
+  // cursor stays in-memory — restarting from the first account is harmless.
   let cursor = 0
   const cooldownUntilMs = new Map<string, number>()
+  // The persisted map is loaded in the background rather than awaited in this
+  // (synchronous) factory: `resolve`/`current` await this promise before their
+  // first selection, so no request is served from a half-loaded map, and a
+  // missing or damaged file costs nothing. Entries for the other region's
+  // accounts are simply never matched — candidates are filtered per region.
+  const cooldownLoaded: Promise<void> = readCooldowns(now())
+    .then((loaded) => {
+      for (const [uid, until] of loaded) cooldownUntilMs.set(uid, until)
+    })
+    .catch(() => {})
   // Conversation → account affinity. In-memory and TTL-bounded: a conversation
   // that has been quiet for a while re-picks, which is fine for a personal
-  // install. Persistent affinity is P3.7.
+  // install. Affinity is deliberately not persisted — its 30-minute TTL does
+  // not survive a host restart anyway, since conversations do not either.
   const affinity = new Map<string, { uid: string; expiresAt: number }>()
 
   /** Credentials this store may serve: its own region's, when one is set. */
@@ -200,6 +213,7 @@ export function createCredentialStore(options: CredentialStoreOptions = {}): Cre
 
   return {
     async current(): Promise<WorkBuddyCredential | undefined> {
+      await cooldownLoaded
       const creds = await candidates()
       const chosen = chooseRotating(creds, cursor, cooldownUntilMs, now())
       if (chosen === undefined) return undefined
@@ -208,6 +222,7 @@ export function createCredentialStore(options: CredentialStoreOptions = {}): Cre
     },
 
     async resolve(sessionKey?: string): Promise<WorkBuddyCredential> {
+      await cooldownLoaded
       const creds = await candidates()
 
       // Session affinity first: a conversation keeps its account as long as that
@@ -252,6 +267,10 @@ export function createCredentialStore(options: CredentialStoreOptions = {}): Cre
 
     noteFailure(uid: string, untilMs: number): void {
       cooldownUntilMs.set(uid, untilMs)
+      // Write-through: the file is what a restart reads back. The write is
+      // tracked in `pendingWrites` (see ./cooldown-state.ts) so tests can await
+      // it deterministically instead of sleeping; in production nothing waits.
+      void writeCooldown(uid, untilMs, now()).catch(() => {})
     },
   }
 }

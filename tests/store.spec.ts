@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { writeCredential, type WorkBuddyCredential } from '../src/credentials.ts'
 import { setAccountDisabled } from '../src/account-state.ts'
+import { awaitCooldownWrites } from '../src/cooldown-state.ts'
 import { NotSignedInError, chooseRotating, createCredentialStore } from '../src/store.ts'
 import type { RefreshOutcome } from '../src/refresh.ts'
 
@@ -24,6 +25,10 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  // Settle fire-and-forget cooldown writes before the environment is restored
+  // and the temp home is deleted: an in-flight write holds the file lock, and
+  // deleting under it fails with EBUSY/ENOTEMPTY (observed).
+  await awaitCooldownWrites()
   if (savedHome === undefined) delete process.env['DSH_HOME']
   else process.env['DSH_HOME'] = savedHome
   await rm(home, { recursive: true, force: true })
@@ -209,6 +214,36 @@ describe('failure cooldown via the store', () => {
     const current = await store.current()
     // After the deadline passes, uid-a is ready again and (cursor 0) is picked.
     expect(current?.uid).toBe('uid-a')
+  })
+
+  it('honours a persisted cooldown after the store is rebuilt', async () => {
+    // The restart scenario: a failure parks uid-a, the process goes away, and a
+    // fresh store (what a DSH restart builds) must still honour the park —
+    // otherwise an exhausted account is retried on every restart.
+    await writeCredential(credential('uid-a'))
+    await writeCredential(credential('uid-b'))
+    const first = createCredentialStore()
+    first.noteFailure('uid-a', Date.now() + 60_000)
+    // Deterministic: wait for the fire-and-forget persistence write, rather
+    // than sleeping and hoping.
+    await awaitCooldownWrites()
+
+    const second = createCredentialStore()
+    expect((await second.current())?.uid).toBe('uid-b')
+  })
+
+  it('does not resurrect an expired persisted cooldown', async () => {
+    await writeCredential(credential('uid-a'))
+    await writeCredential(credential('uid-b'))
+    const first = createCredentialStore()
+    first.noteFailure('uid-a', Date.now() + 20)
+    await awaitCooldownWrites()
+    await new Promise(resolve => setTimeout(resolve, 30))
+
+    // The deadline passed: the fresh store must serve uid-a again, not park it
+    // forever because a stale entry stayed on disk.
+    const second = createCredentialStore()
+    expect((await second.current())?.uid).toBe('uid-a')
   })
 })
 
