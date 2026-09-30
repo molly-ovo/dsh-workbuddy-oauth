@@ -4,16 +4,6 @@
 
 与 [`dsh-workbuddy-connect`](https://github.com/corrinehu/dsh-workbuddy-connect) 的**根本区别**：本插件走**自己的 OAuth 设备码登录**，不读取 WorkBuddy 桌面 App 的凭据文件。
 
-> **接手本项目？先读 [`docs/HANDOFF.md`](./docs/HANDOFF.md)。**
-> 里面有当前状态、已犯过的错、实测过的接口、排查手册与铁律。
->
-> 文档地图（都在 [`docs/`](./docs/)）：
-> - [`docs/HANDOFF.md`](./docs/HANDOFF.md) —— **交接（先读这个）**
-> - [`docs/PHASES.md`](./docs/PHASES.md) —— 阶段设计、验收标准、教训记录
-> - [`docs/REUSE.md`](./docs/REUSE.md) —— 可复用性审计
-> - [`docs/RISK-CONTROL.md`](./docs/RISK-CONTROL.md) —— 防风控设计依据
-> - [`docs/PHASES-旧对话的phase.md`](./docs/PHASES-旧对话的phase.md) —— 立项时的原始计划（对照用）
-
 ---
 
 ## 为什么另做一个
@@ -52,7 +42,7 @@ connect 复用桌面 App 的登录态，因此必须：
 | 积分余额查询（总积分） | ✅ |
 | 设置页卡片 + composer 探测控件 | ✅ |
 
-自动化任务（签到 / 成长 / 猫猫旅行 / 保活等）**明确不做**，决策记录见 [`docs/PHASES.md`](./docs/PHASES.md) 的 P4 章节。
+自动化任务（签到 / 成长 / 猫猫旅行 / 保活等）**明确不做**。
 
 已实现：
 
@@ -78,9 +68,9 @@ connect 复用桌面 App 的登录态，因此必须：
 
 结构验证：`tsc`（host + client）零错误；**221 个测试全部通过**；`tsdown` 构建产出 `lib/index.js`（200 KB）+ `lib/client.js`（44 KB）。
 
-防风控设计见 [`docs/RISK-CONTROL.md`](./docs/RISK-CONTROL.md) —— 对照同类项目的实测结论，说明每条规则借鉴自哪里。
+防风控设计见 `docs/RISK-CONTROL.md`（本地仓库内）—— 对照同类项目的实测结论，说明每条规则借鉴自哪里。
 
-阶段划分、验收标准与当前进度见 [`docs/PHASES.md`](./docs/PHASES.md)。
+阶段划分、验收标准与当前进度见 `docs/PHASES.md`（本地仓库内）。
 
 ## 用法
 
@@ -126,10 +116,10 @@ src/
   commands.ts      斜杠命令（/wb-login 等）
   index.ts         插件入口
   client/          设置页卡片 + composer 探测控件（客户端 bundle）
-tests/              221 个测试，17 个文件
+tests/              228 个测试，18 个文件
 tools/              上游诊断脚本（登录 URL、错误形状等）
 .upstream/          上游参照 clone（只读，已 gitignore）
-docs/               项目文档（HANDOFF / PHASES / REUSE / RISK-CONTROL）
+docs/               本地交接文档（HANDOFF / PHASES 等，不进仓库）
 ```
 
 ---
@@ -145,7 +135,7 @@ pnpm run build
 
 ### 验证要求（不要跳过）
 
-`tests/index.spec.ts` 直接驱动 `apply()`。**这不是可选的覆盖面**——本插件装上后曾因装配顺序错误而完全无法激活（详见 [`docs/PHASES.md`](./docs/PHASES.md) 的教训 L1）。
+`tests/index.spec.ts` 直接驱动 `apply()`。**这不是可选的覆盖面**——本插件装上后曾因装配顺序错误而完全无法激活。
 
 | 层次 | 是否足够 |
 |---|---|
@@ -188,7 +178,7 @@ pnpm run build
 | 对外暴露 HTTP 端口 | 无此需求；回环端点只绑 `127.0.0.1` |
 | 会话复制 / 账号切换 | 那是 switch 类工具（如 `changexbc/workbuddy-switch`）的领域 |
 
-完整清单与阶段划分见 [`docs/PHASES.md`](./docs/PHASES.md)。
+完整清单与阶段划分见 `docs/PHASES.md`（本地仓库内）。
 
 ---
 

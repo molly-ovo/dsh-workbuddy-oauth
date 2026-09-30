@@ -23,5 +23,8 @@ coverage/
 Thumbs.db
 .DS_Store
 
+# 内部交接文档 —— 不进仓库，只留 README 作为入口
+docs/
+
 # 上游参照 clone —— 只读参考，不随仓库分发
 .upstream/
