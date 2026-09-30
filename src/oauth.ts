@@ -208,9 +208,18 @@ export class LoginClient {
 
     if (envelope.code !== undefined && envelope.code !== 0) {
       const detail = `code=${envelope.code} msg=${envelope.msg ?? ''}`
-      // The upstream reports "login ing" as a 4xx with a non-zero code, which
-      // is a pending state rather than a failure.
-      if (response.status >= 400 && response.status < 500) {
+      const msg = envelope.msg ?? ''
+      // "login ing" is a business-level pending state, not a failure: the
+      // upstream reports it as HTTP 200 with `{code:11217, msg:"11217:login
+      // ing..."}` and no `data` (measured live — see tools/login-probe.mjs),
+      // while an older shape surfaced it as a 4xx. Both must map to
+      // `LoginPendingError`, because a user who has simply not finished in the
+      // browser must see "waiting", never "failed".
+      if (
+        envelope.code === 11217
+        || msg.includes('login ing')
+        || (response.status >= 400 && response.status < 500)
+      ) {
         throw new LoginPendingError(`登录尚未完成（${detail}）`)
       }
       throw new Error(detail)

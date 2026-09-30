@@ -119,11 +119,27 @@ describe('begin', () => {
 
 describe('poll', () => {
   it('reports a not-yet-authorized user as pending, not as a failure', async () => {
-    // The shape the upstream actually returns while the user is still in the
+    // One of the two shapes the upstream returns while the user is still in the
     // browser: a 4xx with a non-zero envelope code.
     const fetchImpl = stubFetch([
       ...happyRoutes.slice(0, 1),
       { match: '/auth/token', reply: () => envelope({ code: 11217, msg: 'login ing...' }, 400) },
+    ])
+    const client = new LoginClient({ fetchImpl })
+    const { state } = await client.begin('cn')
+
+    await expect(client.poll(state)).rejects.toBeInstanceOf(LoginPendingError)
+  })
+
+  it('reports the live HTTP 200 + code 11217 shape as pending, not a failure', async () => {
+    // Measured live (tools/login-probe.mjs): the token endpoint answers HTTP
+    // 200 with `{code:11217, msg:"11217:login ing..."}` and no `data` while the
+    // user has not finished authorizing. This was the exact bug that surfaced
+    // as "登录失败：code=11217" on the settings card — the HTTP-status-only
+    // check treated a 200 as a hard failure.
+    const fetchImpl = stubFetch([
+      ...happyRoutes.slice(0, 1),
+      { match: '/auth/token', reply: () => envelope({ code: 11217, msg: '11217:login ing...' }, 200) },
     ])
     const client = new LoginClient({ fetchImpl })
     const { state } = await client.begin('cn')

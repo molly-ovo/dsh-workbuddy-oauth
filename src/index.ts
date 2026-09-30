@@ -33,18 +33,24 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { resolveImageAttachmentAccess } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-attachment'
+import type {} from '@deepseek-ai/dsh-host-webserver'
 import { createWorkBuddyAdapter } from './adapter.ts'
 import { FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, WorkBuddyCatalog } from './catalog.ts'
 import { createWorkBuddyShim } from './shim.ts'
 import { createCredentialStore } from './store.ts'
 import { WorkBuddyUpstreamClient } from './upstream.ts'
-import { credentialFromLogin, displayNameOf } from './credentials.ts'
-import { LoginClient } from './oauth.ts'
+import { credentialFromLogin, displayNameOf, probePathFor, type WorkBuddyCredential } from './credentials.ts'
+import { LoginClient, LoginPendingError } from './oauth.ts'
 import { regionEndpoints, type WorkBuddyRegion } from './region.ts'
 import { saveAccount } from './store.ts'
 import { registerCommands, type UserQuestionsService } from './commands.ts'
 import { PLUGIN_VERSION } from './version.ts'
 import type { WorkBuddyModelInfo } from './catalog.ts'
+import { WorkBuddyProbeStore } from './probe-store.ts'
+import { WorkBuddyProbeService } from './probe-service.ts'
+import { createControlKey, registerWorkBuddyControlRoute } from './control-route.ts'
+import { registerWorkBuddyStatusRoute } from './web-status.ts'
+import { controlPathFor } from './status-paths.ts'
 
 export { PLUGIN_VERSION } from './version.ts'
 export { deriveId, deviceHeaders, requestId } from './fingerprint.ts'
@@ -61,6 +67,24 @@ export { createWorkBuddyAdapter } from './adapter.ts'
 export { createWorkBuddyShim } from './shim.ts'
 export { FALLBACK_WORKBUDDY_MODELS, FALLBACK_WORKBUDDY_AI_MODELS, WorkBuddyCatalog } from './catalog.ts'
 export type { WorkBuddyModelInfo } from './catalog.ts'
+export { WorkBuddyProbeStore, workbuddyProbePath, fingerprintModel } from './probe-store.ts'
+export { WorkBuddyProbeService, type WorkBuddyProbeStatus } from './probe-service.ts'
+export { probeModel, PROBE_EFFORT_CANDIDATES } from './probe.ts'
+export { createControlKey, workBuddyControlHandler } from './control-route.ts'
+export { workBuddyWebStatus, workBuddyStatusHandler } from './web-status.ts'
+export {
+  WORKBUDDY_STATUS_PATH,
+  WORKBUDDY_CONTROL_PATH,
+  WORKBUDDY_AI_CONTROL_PATH,
+  WORKBUDDY_CONTROL_KEY_HEADER,
+  controlPathFor,
+  type WorkBuddyWebStatus,
+  type WorkBuddyWebRegion,
+  type WorkBuddyWebProbeModel,
+  type WorkBuddyWebAccount,
+  type WorkBuddyWebModel,
+  type WorkBuddyControlResult,
+} from './status-paths.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'llm-workbuddy-standalone'
@@ -101,6 +125,21 @@ export function providerIdFor(region: WorkBuddyRegion): string {
 /** Stream idle timeout, matching the ported client's expectations. */
 export const WORKBUDDY_STREAM_IDLE_TIMEOUT_MS = 300_000
 
+/**
+ * Whether *automatic* reasoning-effort probing is authorized.
+ *
+ * **Permanently `false`, and that is a deliberate policy rather than an
+ * unfinished setting.** A probe spends the user's credit, so the upstream
+ * project's own design rule is that a sweep runs only when the user asks for it.
+ * The control route therefore calls `probe(modelId, true)` — per-click manual
+ * consent — and this gate exists so that any *future* automatic trigger has to
+ * come through a deliberate decision instead of inheriting permission by
+ * default.
+ *
+ * Do not wire a settings toggle to this without revisiting that rule.
+ */
+export const AUTOMATIC_PROBING_AUTHORIZED = false
+
 /** How often to re-read credentials to notice a sign-in that happened while running, in ms. */
 const CREDENTIAL_POLL_MS = 15_000
 
@@ -126,6 +165,53 @@ interface RegionRuntime {
   client: WorkBuddyUpstreamClient
   catalog: WorkBuddyCatalog
   store: ReturnType<typeof createCredentialStore>
+  probeStore: WorkBuddyProbeStore
+  probeService: WorkBuddyProbeService
+  /**
+   * The account in effect for this region, as `uid:enterpriseId`, or `undefined`
+   * while signed out.
+   *
+   * **Why a cached synchronous value rather than a store read.** The probe
+   * service judges records synchronously on every adapter read
+   * (`observe: modelId => service.recordFor(modelId)`), but the credential store
+   * is asynchronous — it lists and parses files. Awaiting inside that path would
+   * turn a synchronous model-descriptor read into a promise the adapter cannot
+   * wait on. So the identity is refreshed whenever the credential is actually
+   * read (the startup fetch, the poll, a sign-in, a manual refresh), and the
+   * probe service re-checks it before writing a result back.
+   */
+  account: () => string | undefined
+  /**
+   * Refresh the cached identity from a credential just read, or clear it when
+   * signed out.
+   *
+   * Called by every path that reads the credential (the startup fetch, the poll,
+   * a sign-in, a manual refresh), which is what keeps {@link RegionRuntime.account}
+   * truthful without an async read on the adapter's synchronous path.
+   */
+  setAccount: (credential: WorkBuddyCredential | undefined) => void
+  /**
+   * Rebuild the provider snapshot and tell the model picker to re-read.
+   *
+   * A no-op until {@link startRegion} has built the adapter, so a route that
+   * fires before registration cannot throw on an undefined callback.
+   */
+  invalidate: () => void
+}
+
+/**
+ * The stable identity key for a credential, or `undefined` when it has no uid.
+ *
+ * `enterpriseId` joins the uid because the same user id can exist in two
+ * enterprises, and a probe observation (an entitlement fact) must not cross
+ * between them. A uid-less credential yields `undefined` rather than a
+ * `":enterpriseId"` key that every uid-less account would silently share.
+ */
+export function accountIdentityOf(
+  credential: Pick<WorkBuddyCredential, 'uid' | 'enterpriseId'> | undefined,
+): string | undefined {
+  if (credential === undefined || credential.uid === '') return undefined
+  return `${credential.uid}:${credential.enterpriseId ?? ''}`
 }
 
 /**
@@ -138,13 +224,45 @@ function fallbackFor(region: WorkBuddyRegion): readonly WorkBuddyModelInfo[] {
 }
 
 /** Build one region's runtime. */
-function createRegionRuntime(region: WorkBuddyRegion, identity: { appVersion?: string; cliVersion?: string }): RegionRuntime {
+function createRegionRuntime(
+  region: WorkBuddyRegion,
+  identity: { appVersion?: string; cliVersion?: string },
+  consent: () => boolean,
+): RegionRuntime {
   const client = new WorkBuddyUpstreamClient({ identity })
   const catalog = new WorkBuddyCatalog(fallbackFor(region))
   // Region-scoped: a credential is only valid against its own upstream host, so
   // a store must never hand the international service a domestic token.
   const store = createCredentialStore({ region })
-  return { region, client, catalog, store }
+  const probeStore = new WorkBuddyProbeStore({
+    pluginVersion: PLUGIN_VERSION,
+    // This plugin's own file, not the ported default: see `probePathFor`.
+    path: probePathFor(region),
+  })
+  let account: string | undefined
+  const probeService = new WorkBuddyProbeService({
+    store: probeStore,
+    catalog,
+    credentials: store,
+    client,
+    consent,
+    account: () => account,
+  })
+  return {
+    region,
+    client,
+    catalog,
+    store,
+    probeStore,
+    probeService,
+    account: () => account,
+    // Records are read and written against the identity refreshed by
+    // `refreshCatalog`; see {@link RegionRuntime.account}.
+    setAccount: (credential) => {
+      account = accountIdentityOf(credential)
+    },
+    invalidate: () => {},
+  }
 }
 
 /**
@@ -171,6 +289,11 @@ async function refreshCatalog(
   // region filter and the selection rule, and duplicating either would let the
   // catalog be fetched with one account while requests are served by another.
   const credential = await runtime.store.current()
+  // Keep the cached identity in step with the credential this read settled on.
+  // Every path that reads a credential goes through here (or the poll below), so
+  // this one assignment is what makes the probe service's synchronous
+  // `account()` truthful.
+  runtime.setAccount(credential)
   if (credential === undefined) {
     // No account for this region: hide the group rather than offering models
     // that can only fail on the first message.
@@ -225,7 +348,10 @@ export function apply(ctx: Context, config: Config): void {
     ...(config.cliVersion !== undefined && config.cliVersion !== '' ? { cliVersion: config.cliVersion } : {}),
   }
 
-  const runtimes = [createRegionRuntime('cn', identity), createRegionRuntime('global', identity)]
+  const runtimes = [
+    createRegionRuntime('cn', identity, () => AUTOMATIC_PROBING_AUTHORIZED),
+    createRegionRuntime('global', identity, () => AUTOMATIC_PROBING_AUTHORIZED),
+  ]
 
   /**
    * Live login attempts, keyed by state.
@@ -286,9 +412,20 @@ export function apply(ctx: Context, config: Config): void {
             (hostPath) => ctx.get('fs')?.processPathFromHostPath(hostPath),
             ref,
           ),
+        // The reasoning-level gap this plugin used to have: the upstream no
+        // longer declares `supportedEfforts` for most rows, so without a local
+        // observation those models get no level picker at all. This is the seam
+        // that supplies one from a user-authorized probe.
+        observe: (modelId) => runtime.probeService.recordFor(modelId),
       })
 
       const release = ctx.llm.registerAdapter([providerIdFor(region)], result.adapter)
+      // Routes and the settings card invalidate through this, so the adapter is
+      // rebuilt after a probe observation or a manual catalog refresh.
+      runtime.invalidate = () => {
+        result.invalidate()
+        ctx.emit('llm/adapters-updated')
+      }
       try {
         ctx.effect(() => () => {
           release()
@@ -352,6 +489,27 @@ export function apply(ctx: Context, config: Config): void {
   timers.push(poll)
 
   /**
+   * Complete a sign-in: redeem the authorization, persist the credential, and
+   * refresh every region's catalog.
+   *
+   * **One implementation, two surfaces.** Both `/wb-login` and the settings
+   * card's sign-in button reach the upstream through this, so the two entry
+   * points cannot drift into two different login flows — the failure that would
+   * produce is a card that signs in "successfully" while the command path (which
+   * the rest of the plugin trusts) never ran.
+   */
+  const completeLogin = async (state: string): Promise<{ uid: string; label: string }> => {
+    const result = await logins.complete(state)
+    const credential = credentialFromLogin(result)
+    await saveAccount(credential)
+    // Refresh immediately so the models are selectable without waiting for the
+    // periodic poll.
+    await Promise.all(runtimes.map((runtime) => refreshCatalog(ctx, runtime, log, 'login')))
+    ctx.emit('llm/adapters-updated')
+    return { uid: credential.uid, label: displayNameOf(credential) }
+  }
+
+  /**
    * Register the sign-in commands.
    *
    * `userQuestions` is read through `ctx.get` rather than declared as a
@@ -360,20 +518,95 @@ export function apply(ctx: Context, config: Config): void {
    * degrades to a text prompt when it is missing.
    */
   const commandDisposers = registerCommands(ctx, logins, {
-    complete: async (state) => {
-      const result = await logins.complete(state)
-      const credential = credentialFromLogin(result)
-      await saveAccount(credential)
-      // Refresh immediately so the models are selectable without waiting for
-      // the periodic poll below.
-      await Promise.all(runtimes.map((runtime) => refreshCatalog(ctx, runtime, log, 'login')))
-      ctx.emit('llm/adapters-updated')
-      return { uid: credential.uid, label: displayNameOf(credential) }
-    },
+    complete: completeLogin,
     userQuestions: ctx.get('userQuestions') as UserQuestionsService | undefined,
     warn: (message, error) => {
       ctx.logger.warn(`dsh-workbuddy-standalone: ${message}`, error)
     },
+  })
+
+  /**
+   * Same-origin routes backing the settings card and the probe control.
+   *
+   * `webServer` is optional — a headless or ACP profile serves no browser — so
+   * it is reached through `ctx.inject` rather than declared in `inject`. Naming
+   * it as a hard dependency would make the whole plugin refuse to load exactly
+   * where the commands still work.
+   */
+  const controlKey = createControlKey()
+  ctx.inject(['webServer'], (webCtx) => {
+    registerWorkBuddyStatusRoute(webCtx, {
+      regions: runtimes.map(runtime => ({
+        region: runtime.region,
+        providerId: providerIdFor(runtime.region),
+        models: () => runtime.catalog.current(),
+        probeRunning: () => runtime.probeService.isRunning(),
+        probeCandidates: () =>
+          runtime.catalog.current().filter(info => runtime.probeService.isCandidate(info.id)).map(info => info.id),
+        probeResults: () =>
+          runtime.catalog.current().flatMap(info => {
+            const record = runtime.probeService.recordFor(info.id)
+            return record === undefined ? [] : [{ id: info.id, record }]
+          }),
+      })),
+      controlKey,
+    })
+
+    for (const runtime of runtimes) {
+      registerWorkBuddyControlRoute(webCtx, {
+        // One path per region: `webServer.register` throws on a duplicate, so a
+        // shared path would abort the second region's control surface.
+        path: controlPathFor(runtime.region),
+        probe: async (modelId) => {
+          // The authenticated manual endpoint is reached only after per-model
+          // confirmation, so it carries one-request consent. This never changes
+          // the automatic-probing policy.
+          const result = await runtime.probeService.probe(modelId, true)
+          if (result.state === 'ok') runtime.invalidate()
+          return result
+        },
+        clear: () => {
+          runtime.probeStore.clear()
+          runtime.invalidate()
+        },
+        refresh: async () => {
+          if (stopped) return { state: 'failed', reason: 'plugin is stopping' }
+          const changed = await refreshCatalog(ctx, runtime, log, 'login')
+          if (changed) runtime.invalidate()
+          return runtime.catalog.isVisible()
+            ? { state: 'refreshed', reason: `${runtime.catalog.current().length} models` }
+            : { state: 'signed-out' }
+        },
+        /**
+         * The card's sign-in flow.
+         *
+         * `begin` is region-specific because the authorization URL is issued by
+         * one upstream, but `complete` is not: the state carries its own region
+         * (see `LoginClient`), so the card cannot redeem a state against the
+         * wrong host. Both regions therefore share one `complete`.
+         */
+        loginBegin: async (region) => {
+          const target = region === 'global' ? 'global' : 'cn'
+          const request = await logins.begin(target)
+          return { state: 'pending', url: request.url, loginState: request.state }
+        },
+        loginComplete: async (state) => {
+          try {
+            const result = await completeLogin(state)
+            return { state: 'ok', reason: result.label }
+          } catch (error: unknown) {
+            // A not-yet-approved authorization is the normal case while the user
+            // is still in the browser, so it is reported as `pending` rather
+            // than as a failure; anything else is a real error.
+            if (error instanceof LoginPendingError) return { state: 'pending' }
+            return {
+              state: 'failed',
+              reason: error instanceof Error ? error.message : String(error),
+            }
+          }
+        },
+      }, controlKey)
+    }
   })
 
   ctx.effect(() => () => {

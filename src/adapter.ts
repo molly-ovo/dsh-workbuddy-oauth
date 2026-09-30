@@ -19,7 +19,7 @@ import type { CredentialStore as WorkBuddyCredentialStore } from './store.ts'
 import type { WorkBuddyCatalog, WorkBuddyModelInfo } from './catalog.ts'
 import type { WorkBuddyProbeRecord } from './probe-store.ts'
 import type { WorkBuddyShim } from './shim.ts'
-import { normalizeCredits } from './upstream.ts'
+import { normalizeCredits, type WorkBuddyEffort } from './upstream.ts'
 
 /** Provider route this bundle owns. */
 export const WORKBUDDY_PROVIDER = 'workbuddy'
@@ -232,21 +232,43 @@ export function reasoningFields(
     return { reasoning: false }
   }
   const declared = reasoning.supportedEfforts
-  const efforts = declared !== undefined && declared.length > 0
-    ? declared
-    // Only a validating observation may supply a set, and only for rows the
-    // upstream left undeclared.
-    : observed?.validation === 'validating' && observed.efforts.length > 0
-      ? observed.efforts
-      : undefined
-  if (efforts === undefined) {
-    // Undeclared and unobserved (or observed as non-validating): no thinking
-    // control, and no `reasoning_effort` on the wire.
-    return { reasoning: false }
+  if (declared !== undefined && declared.length > 0) {
+    return { reasoning: true, thinkingLevelMap: thinkingLevelMap(declared, reasoning, true) }
   }
+  // Only a validating observation may supply a set, and only for rows the
+  // upstream left undeclared.
+  if (observed?.validation === 'validating' && observed.efforts.length > 0) {
+    return { reasoning: true, thinkingLevelMap: thinkingLevelMap(observed.efforts, reasoning, false) }
+  }
+  // Undeclared and unobserved: the upstream still names a default effort for
+  // the model, so offer exactly that level instead of no control at all.
+  // Without this a reasoning model reads as "off only", which hides the one
+  // thing the upstream *does* guarantee — the effort it uses when none is
+  // chosen — and forces a probe before any level can be picked.
+  if (reasoning.defaultEffort !== undefined) {
+    return { reasoning: true, thinkingLevelMap: thinkingLevelMap([reasoning.defaultEffort], reasoning, false) }
+  }
+  // No declared set, no observation, and no default either: nothing honest to
+  // offer, so fall back to the off-only reading.
+  return { reasoning: false }
+}
+
+/**
+ * Build the pi-ai `thinkingLevelMap` for one model.
+ *
+ * Every level is written explicitly — `null` for unsupported — rather than left
+ * absent, because pi-ai reads an *absent* low/medium/high key as "use the
+ * provider default" and only filters a level when it maps to `null`. A partial
+ * map would therefore re-introduce the levels this function means to hide.
+ */
+function thinkingLevelMap(
+  efforts: readonly WorkBuddyEffort[],
+  reasoning: NonNullable<WorkBuddyModelInfo['reasoning']>,
+  declared: boolean,
+): ThinkingLevelMap {
   const map: Record<ModelThinkingLevel, string | null> = {
     // Probing never grants `off`; only an explicit declaration does.
-    off: reasoning.canDisableThinking === true && declared !== undefined && declared.length > 0 ? 'off' : null,
+    off: declared && reasoning.canDisableThinking === true ? 'off' : null,
     // `minimal` is not in the upstream effort vocabulary (EFFORT_VALUES), so
     // no declared set — and no probe candidate — can ever contain it.
     minimal: null,
@@ -256,7 +278,7 @@ export function reasoningFields(
     xhigh: efforts.includes('xhigh') ? 'xhigh' : null,
     max: efforts.includes('max') ? 'max' : null,
   }
-  return { reasoning: true, thinkingLevelMap: map as ThinkingLevelMap }
+  return map as ThinkingLevelMap
 }
 
 /** Build one pi-ai model descriptor pointing at the loopback shim. */

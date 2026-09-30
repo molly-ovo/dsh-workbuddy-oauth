@@ -63,6 +63,36 @@ export function credentialsDir(): string {
   return join(stateDir(), 'accounts')
 }
 
+/**
+ * Absolute path of one plugin-owned state file.
+ *
+ * Everything this plugin writes lives under {@link stateDir()}, so a single
+ * directory can be deleted to reset it and nothing is scattered across the
+ * Harness home.
+ *
+ * @param name - file name inside the state directory.
+ */
+export function stateFilePath(name: string): string {
+  return join(stateDir(), name)
+}
+
+/**
+ * Path of one region's probe-record file.
+ *
+ * **Deliberately not the ported default.** `probe-store.ts`'s
+ * `workbuddyProbePath()` resolves to `$DSH_HOME/.workbuddy-probe.json`, which is
+ * exactly where `dsh-workbuddy-connect` keeps its own CN records. Sharing that
+ * file would make two plugins write one document, and while the records are
+ * account-keyed the *fingerprint basis* is each plugin's own — so a record
+ * written by one could be judged stale by the other and silently re-probed.
+ * Per region, because the two upstreams disagree about rates and effort sets
+ * for the same model ids, so a CN observation must never answer for a global
+ * row.
+ */
+export function probePathFor(region: WorkBuddyRegion): string {
+  return stateFilePath(`probe-${region}.json`)
+}
+
 /** Absolute path of one account's credential file. */
 export function credentialPath(uid: string): string {
   return join(credentialsDir(), `${CREDENTIAL_FILE_PREFIX}${uid}.json`)

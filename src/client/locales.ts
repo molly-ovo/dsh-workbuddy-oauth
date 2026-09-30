@@ -1,0 +1,107 @@
+/**
+ * Copy for the WorkBuddy settings card and the reasoning-level control.
+ *
+ * @module dsh-workbuddy-standalone/client/locales
+ */
+
+/** Dictionary keys this namespace owns. */
+export type WorkBuddyLocaleKey =
+  | 'title'
+  | 'intro'
+  | 'signedOut'
+  | 'signedInAs'
+  | 'regionCn'
+  | 'regionGlobal'
+  | 'expiresSoon'
+  | 'probeRunning'
+  | 'probeIdle'
+  | 'probeVerified'
+  | 'probeLabel'
+  | 'probeConfirmBody'
+  | 'probeConfirmAction'
+  | 'probeNoteVerified'
+  | 'probeNoteFailed'
+  | 'probeTooltipIdle'
+  | 'probeTooltipVerified'
+  | 'probeTooltipRunning'
+  | 'probeTooltipRetry'
+  | 'probeDismiss'
+  | 'cancel'
+  | 'login'
+  | 'loginStarting'
+  | 'loginOpenLink'
+  | 'loginWaiting'
+  | 'loginRetry'
+  | 'loginSucceeded'
+  | 'loginFailed'
+  | 'models'
+  | 'noModels'
+  | 'refresh'
+
+export const zh: Record<WorkBuddyLocaleKey, string> = {
+  title: 'WorkBuddy',
+  intro: '不依赖桌面 App 的 WorkBuddy 登录与状态。',
+  signedOut: '尚未登录',
+  signedInAs: '已登录：{label}',
+  regionCn: '国内版',
+  regionGlobal: '国际版',
+  expiresSoon: '令牌 {time} 后需刷新',
+  probeRunning: '正在检测…',
+  probeIdle: '未检测',
+  probeVerified: '已确认可用档位',
+  probeLabel: '推理档位',
+  probeConfirmBody: '检测会向上游发出少量真实请求，可能消耗积分。是否继续？',
+  probeConfirmAction: '开始检测',
+  probeNoteVerified: '已确认档位：{levels}',
+  probeNoteFailed: '检测失败，可稍后重试。',
+  probeTooltipIdle: '检测 {model} 支持的推理档位（会消耗少量积分）',
+  probeTooltipVerified: '已确认档位：{levels}',
+  probeTooltipRunning: '正在检测 {model}…',
+  probeTooltipRetry: '上次检测未完成，点击重试',
+  probeDismiss: '关闭',
+  cancel: '取消',
+  login: '登录',
+  loginStarting: '正在获取授权链接…',
+  loginOpenLink: '请在浏览器中打开以下链接完成授权：',
+  loginWaiting: '已打开链接，等待上游确认…',
+  loginRetry: '重新获取链接',
+  loginSucceeded: '登录成功：{label}',
+  loginFailed: '登录失败：{reason}',
+  models: '{count} 个模型',
+  noModels: '无可用模型',
+  refresh: '刷新',
+}
+
+export const en: Record<WorkBuddyLocaleKey, string> = {
+  title: 'WorkBuddy',
+  intro: 'WorkBuddy sign-in and status without the desktop app.',
+  signedOut: 'Not signed in',
+  signedInAs: 'Signed in as {label}',
+  regionCn: 'China',
+  regionGlobal: 'International',
+  expiresSoon: 'token refreshes in {time}',
+  probeRunning: 'Detecting…',
+  probeIdle: 'Not detected',
+  probeVerified: 'Verified levels',
+  probeLabel: 'Reasoning levels',
+  probeConfirmBody: 'Detection sends a few real requests upstream and may spend credit. Continue?',
+  probeConfirmAction: 'Detect',
+  probeNoteVerified: 'Verified levels: {levels}',
+  probeNoteFailed: 'Detection failed. Try again later.',
+  probeTooltipIdle: 'Detect the reasoning levels {model} accepts (spends a little credit)',
+  probeTooltipVerified: 'Verified levels: {levels}',
+  probeTooltipRunning: 'Detecting {model}…',
+  probeTooltipRetry: 'The last detection did not finish. Click to retry.',
+  probeDismiss: 'Dismiss',
+  cancel: 'Cancel',
+  login: 'Sign in',
+  loginStarting: 'Requesting an authorization link…',
+  loginOpenLink: 'Open this link in your browser to authorize:',
+  loginWaiting: 'Link opened. Waiting for the upstream to confirm…',
+  loginRetry: 'Get a new link',
+  loginSucceeded: 'Signed in: {label}',
+  loginFailed: 'Sign-in failed: {reason}',
+  models: '{count} models',
+  noModels: 'No models available',
+  refresh: 'Refresh',
+}

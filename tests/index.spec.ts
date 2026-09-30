@@ -16,7 +16,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
-import { apply, providerIdFor, WORKBUDDY_AI_PROVIDER, WORKBUDDY_PROVIDER } from '../src/index.ts'
+import { apply, inject, providerIdFor, WORKBUDDY_AI_PROVIDER, WORKBUDDY_PROVIDER } from '../src/index.ts'
+import { WORKBUDDY_AI_CONTROL_PATH, WORKBUDDY_CONTROL_PATH, WORKBUDDY_STATUS_PATH } from '../src/status-paths.ts'
 
 let home: string
 const savedHome = process.env['DSH_HOME']
@@ -38,6 +39,13 @@ interface Registration {
   adapter: { listModels?: unknown }
 }
 
+/** One registered web route, as `ctx.webServer.register` recorded it. */
+interface Route {
+  kind: unknown
+  path: string
+  handler: unknown
+}
+
 /**
  * A context stub carrying only what `apply` touches.
  *
@@ -45,14 +53,23 @@ interface Registration {
  * happened *before* it was reached, so a test that only counted registrations
  * would also fail — but the ordering test below asserts the shim was ready,
  * which is the actual invariant.
+ *
+ * `inject` is modelled because `apply` reaches `webServer` that way: the real
+ * service is optional (a headless profile serves no browser), so it must not be
+ * a hard dependency. Passing it here is what makes `apply` register the routes,
+ * which is how the "browser profile" case is exercised at all.
  */
 function fakeContext(): {
   ctx: Context
   registrations: Registration[]
   effects: Array<() => void>
+  routes: Route[]
+  injected: string[]
 } {
   const registrations: Registration[] = []
   const effects: Array<() => void> = []
+  const routes: Route[] = []
+  const injected: string[] = []
   const ctx = {
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     llm: {
@@ -65,13 +82,30 @@ function fakeContext(): {
       register: () => () => {},
     },
     get: () => undefined,
+    /**
+     * Cordis' `inject` loads the callback once every named service is
+     * available. The stub always satisfies the request (`webServer` exists) so
+     * the route registrations run; the scoped context is the same object, which
+     * matches how `webServer` is reached in production.
+     */
+    inject(names: readonly string[], callback: (scoped: Context) => void) {
+      injected.push(...names)
+      callback(ctx)
+      return () => {}
+    },
     effect(fn: () => () => void) {
       effects.push(fn())
       return () => {}
     },
     emit: vi.fn(),
+    webServer: {
+      register(route: Route) {
+        routes.push(route)
+        return () => {}
+      },
+    },
   } as unknown as Context
-  return { ctx, registrations, effects }
+  return { ctx, registrations, effects, routes, injected }
 }
 
 /** Let the async `startRegion` calls settle. */
@@ -150,4 +184,89 @@ describe('apply', () => {
       expect(registration.providerIds).toHaveLength(1)
     }
   })
+
+  it('mounts the status and control routes on a browser profile', async () => {
+    // The card and the probe control read these routes. Without them the
+    // settings page renders nothing and the probe button cannot reach the host,
+    // which is exactly the state this change exists to end.
+    const { ctx, routes } = fakeContext()
+    apply(ctx, { appVersion: '', cliVersion: '', region: 'cn' })
+    await settle()
+
+    // One control route per region: `webServer.register` throws on a duplicate
+    // path, so a shared path would abort the second region's control surface.
+    const paths = routes.map(route => route.path).sort()
+    expect(paths).toEqual([WORKBUDDY_STATUS_PATH, WORKBUDDY_CONTROL_PATH, WORKBUDDY_AI_CONTROL_PATH].sort())
+    expect(new Set(paths).size).toBe(paths.length)
+    for (const route of routes) expect(route.kind).toBe('exact')
+  })
+
+  it('reaches webServer through inject rather than requiring it', async () => {
+    // A hard dependency would make the whole plugin refuse to load in a
+    // headless or ACP profile, where the commands still must work.
+    const { ctx, injected } = fakeContext()
+    apply(ctx, { appVersion: '', cliVersion: '', region: 'cn' })
+    await settle()
+
+    expect(injected).toContain('webServer')
+    expect(inject).not.toContain('webServer')
+  })
+
+  it('hides every region while signed out, so no route promises a model it cannot serve', async () => {
+    // The status document is what the card renders. With no credential the
+    // regions must report `signedIn: false` and an empty roster rather than the
+    // built-in fallback, which would offer models whose first message fails.
+    const { ctx, routes } = fakeContext()
+    apply(ctx, { appVersion: '', cliVersion: '', region: 'cn' })
+    await settle()
+
+    const statusRoute = routes.find(route => route.path === WORKBUDDY_STATUS_PATH)
+    expect(statusRoute).toBeDefined()
+    const body = await statusBody(statusRoute)
+    expect(body.status).toBe('ok')
+    expect(body.accounts).toEqual([])
+    expect(body.regions).toHaveLength(2)
+    for (const region of body.regions) {
+      expect(region.signedIn).toBe(false)
+      expect(region.models).toEqual([])
+      expect(region.probeResults).toEqual([])
+    }
+    // Each region advertises its own control path; the card posts to it, so a
+    // duplicate or a mismatch is a 404 the user would see as a dead button.
+    expect(body.regions.map(region => region.controlPath).sort())
+      .toEqual([WORKBUDDY_CONTROL_PATH, WORKBUDDY_AI_CONTROL_PATH].sort())
+  })
+
+  it('hands the control key to the card', async () => {
+    // Without the key the control route answers 403 and the probe button does
+    // nothing at all — silently, because the card degrades a failed POST.
+    const { ctx, routes } = fakeContext()
+    apply(ctx, { appVersion: '', cliVersion: '', region: 'cn' })
+    await settle()
+
+    const body = await statusBody(routes.find(route => route.path === WORKBUDDY_STATUS_PATH))
+    expect(typeof body.controlKey).toBe('string')
+    expect(body.controlKey.length).toBeGreaterThan(0)
+  })
 })
+
+/** Drive the mounted status route's handler and parse its JSON answer. */
+async function statusBody(route: Route | undefined): Promise<{
+  status: string
+  accounts: unknown[]
+  regions: Array<{ signedIn: boolean; models: unknown[]; probeResults: unknown[]; controlPath: string }>
+  controlKey: string
+}> {
+  if (route === undefined) throw new Error('status route was not mounted')
+  const handler = route.handler as (req: unknown, res: unknown) => Promise<void>
+  let captured = ''
+  const res = {
+    writeHead: () => res,
+    end: (payload: string) => {
+      captured = payload
+      return res
+    },
+  }
+  await handler({ method: 'GET', headers: { host: '127.0.0.1:43120' } }, res)
+  return JSON.parse(captured) as never
+}
