@@ -39,6 +39,7 @@ import {
   deleteCredential,
   type WorkBuddyCredential,
 } from './credentials.ts'
+import { disabledUids, setAccountDisabled } from './account-state.ts'
 import { LoginClient, LoginExpiredError, LoginPendingError, parseRegionInput } from './oauth.ts'
 import { regionEndpoints, type WorkBuddyRegion } from './region.ts'
 import { PLUGIN_VERSION } from './version.ts'
@@ -114,10 +115,12 @@ function describeExpiry(credential: WorkBuddyCredential, now = Date.now()): stri
  * Render the account list, shared by `/wb-status` and the post-login summary.
  *
  * @param credentials - Accounts to show.
+ * @param disabled - Disabled account uids, marking entries excluded from selection.
  * @param now - Current epoch milliseconds.
  */
 export function renderAccounts(
   credentials: readonly WorkBuddyCredential[],
+  disabled: ReadonlySet<string> = new Set(),
   now: number = Date.now(),
 ): string {
   if (credentials.length === 0) {
@@ -126,7 +129,8 @@ export function renderAccounts(
   const lines = credentials.map((credential, index) => {
     const label = displayNameOf(credential)
     const region = regionEndpoints(credential.region).label
-    return `  ${index + 1}. ${label} · ${region} · ${describeExpiry(credential, now)}`
+    const state = disabled.has(credential.uid) ? '（已停用）' : ''
+    return `  ${index + 1}. ${label} · ${region} · ${describeExpiry(credential, now)}${state}`
   })
   return [`已登录 ${credentials.length} 个账号：`, ...lines].join('\n')
 }
@@ -271,12 +275,13 @@ export function registerCommands(
           try {
             const result = await deps.complete(state)
             const accounts = await listCredentials()
+            const disabled = await disabledUids()
             return {
               kind: 'success',
               text: [
                 `登录成功：${result.label}`,
                 '',
-                renderAccounts(accounts),
+                renderAccounts(accounts, disabled),
                 '',
                 '模型列表已刷新，可在模型选择器中选择 WorkBuddy 模型。',
               ].join('\n'),
@@ -322,12 +327,13 @@ export function registerCommands(
       description: '查看已登录的 WorkBuddy 账号与插件状态',
       handler: async (): Promise<CommandResult> => {
         const credentials = await listCredentials()
+        const disabled = await disabledUids()
         return {
           kind: 'success',
           text: [
             `dsh-workbuddy-standalone v${PLUGIN_VERSION}`,
             '',
-            renderAccounts(credentials),
+            renderAccounts(credentials, disabled),
           ].join('\n'),
         }
       },
@@ -359,7 +365,7 @@ export function registerCommands(
                 ? '存在多个账号，请指定要退出的 uid 前缀：'
                 : `没有匹配「${selector}」的账号。`,
               '',
-              renderAccounts(credentials),
+              renderAccounts(credentials, await disabledUids()),
               '',
               '用法：/wb-logout <uid 前缀>',
             ].join('\n'),
@@ -376,7 +382,71 @@ export function registerCommands(
             '',
             remaining.length === 0
               ? '已无登录账号，模型分组将在下次刷新后消失。'
-              : renderAccounts(remaining),
+              : renderAccounts(remaining, await disabledUids()),
+          ].join('\n'),
+        }
+      },
+    }),
+  )
+
+  /** `/wb-account [enable|disable] [uid 前缀]` — list and toggle accounts. */
+  disposers.push(
+    commands.register({
+      name: 'wb-account',
+      description: '管理 WorkBuddy 账号（列出 / 启用 / 停用）',
+      input: { hint: '[enable | disable] [uid 前缀]' },
+      handler: async ({ rawInput }): Promise<CommandResult> => {
+        const [verb, selectorRaw] = rawInput.trim().split(/\s+/) as [string, string | undefined]
+        const selector = selectorRaw?.trim() ?? ''
+
+        if (verb === undefined || verb === '') {
+          // Listing: show every stored account with its enabled/disabled state.
+          const credentials = await listCredentials()
+          const disabled = await disabledUids()
+          return { kind: 'success', text: renderAccounts(credentials, disabled) }
+        }
+
+        if (verb !== 'enable' && verb !== 'disable') {
+          return {
+            kind: 'error',
+            text: `无法识别动作「${verb}」。用法：/wb-account [enable | disable] <uid 前缀>（不带动作则列出全部账号）`,
+          }
+        }
+
+        const credentials = await listCredentials()
+        if (credentials.length === 0) {
+          return { kind: 'success', text: '当前没有已登录的账号。执行 /wb-login 开始登录。' }
+        }
+
+        // No selector with several accounts is ambiguous: refuse rather than
+        // toggle the wrong one. A single account may omit the selector.
+        const target = selector === ''
+          ? (credentials.length === 1 ? credentials[0] : undefined)
+          : credentials.find((credential) => credential.uid.startsWith(selector))
+
+        if (target === undefined) {
+          return {
+            kind: 'error',
+            text: [
+              selector === ''
+                ? '存在多个账号，请指定要操作的 uid 前缀：'
+                : `没有匹配「${selector}」的账号。`,
+              '',
+              renderAccounts(credentials, await disabledUids()),
+              '',
+              '用法：/wb-account <enable | disable> <uid 前缀>',
+            ].join('\n'),
+          }
+        }
+
+        const disabled = await setAccountDisabled(target.uid, verb === 'disable')
+        const label = displayNameOf(target)
+        return {
+          kind: 'success',
+          text: [
+            `${verb === 'disable' ? '已停用' : '已启用'}：${label}`,
+            '',
+            renderAccounts(credentials, disabled),
           ].join('\n'),
         }
       },

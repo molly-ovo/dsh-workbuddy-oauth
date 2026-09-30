@@ -11,7 +11,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { writeCredential, type WorkBuddyCredential } from '../src/credentials.ts'
-import { NotSignedInError, chooseCredential, createCredentialStore } from '../src/store.ts'
+import { setAccountDisabled } from '../src/account-state.ts'
+import { NotSignedInError, chooseRotating, createCredentialStore } from '../src/store.ts'
 import type { RefreshOutcome } from '../src/refresh.ts'
 
 let home: string
@@ -39,35 +40,6 @@ function credential(uid: string, overrides: Partial<WorkBuddyCredential> = {}): 
     ...overrides,
   }
 }
-
-describe('credential selection', () => {
-  it('returns undefined when nothing is stored', () => {
-    expect(chooseCredential([])).toBeUndefined()
-  })
-
-  it('prefers a live token over an expired one', () => {
-    // Serving from a live account avoids spending a rotation on a request that
-    // another account could answer as-is.
-    const expired = credential('uid-a', { expiresAtMs: Date.now() - 1 })
-    const live = credential('uid-z')
-    expect(chooseCredential([expired, live])?.uid).toBe('uid-z')
-  })
-
-  it('falls back to an expired account when that is all there is', () => {
-    // Refusing here would make a single-account install unusable whenever its
-    // token happened to lapse; the store refreshes instead.
-    const expired = credential('uid-a', { expiresAtMs: Date.now() - 1 })
-    expect(chooseCredential([expired])?.uid).toBe('uid-a')
-  })
-
-  it('is stable across calls rather than alternating', () => {
-    // Alternating accounts would multiply credential traffic and, upstream,
-    // look like several devices sharing work.
-    const pool = [credential('uid-c'), credential('uid-a'), credential('uid-b')]
-    expect(chooseCredential(pool)?.uid).toBe('uid-a')
-    expect(chooseCredential([...pool].reverse())?.uid).toBe('uid-a')
-  })
-})
 
 describe('resolve', () => {
   it('throws NotSignedIn when no account exists', async () => {
@@ -137,5 +109,160 @@ describe('current', () => {
 
   it('is undefined before any sign-in', async () => {
     await expect(createCredentialStore().current()).resolves.toBeUndefined()
+  })
+})
+
+describe('disabled accounts', () => {
+  it('excludes a disabled account from selection', async () => {
+    await writeCredential(credential('uid-a'))
+    await writeCredential(credential('uid-b'))
+    await setAccountDisabled('uid-a', true)
+
+    const store = createCredentialStore()
+    const current = await store.current()
+    expect(current?.uid).toBe('uid-b')
+  })
+
+  it('falls back to a disabled account only when nothing else is left', async () => {
+    await writeCredential(credential('uid-a'))
+    await setAccountDisabled('uid-a', true)
+
+    // No enabled account remains, so the store reports nothing selectable
+    // rather than spending a disabled account's token.
+    await expect(createCredentialStore().current()).resolves.toBeUndefined()
+  })
+})
+
+describe('chooseRotating', () => {
+  const pool = [credential('uid-a'), credential('uid-b'), credential('uid-c')]
+  const now = Date.now()
+
+  it('returns undefined for an empty pool', () => {
+    expect(chooseRotating([], 0, new Map(), now)).toBeUndefined()
+  })
+
+  it('rotates across accounts in ring order', () => {
+    let cursor = 0
+    const first = chooseRotating(pool, cursor, new Map(), now)
+    cursor = first?.nextCursor ?? 0
+    const second = chooseRotating(pool, cursor, new Map(), now)
+
+    expect(first?.credential.uid).toBe('uid-a')
+    expect(second?.credential.uid).toBe('uid-b')
+    // The cursor always advances, so a long-running pool spreads load instead
+    // of pinning the lexicographically-first account.
+    expect(first?.nextCursor).toBe(1)
+    expect(second?.nextCursor).toBe(2)
+  })
+
+  it('skips a cooled-out account', () => {
+    const cooled = new Map([['uid-a', now + 60_000]])
+    const chosen = chooseRotating(pool, 0, cooled, now)
+    expect(chosen?.credential.uid).toBe('uid-b')
+  })
+
+  it('serves the soonest-to-recover account when all are cooled out', () => {
+    const cooled = new Map([
+      ['uid-a', now + 120_000],
+      ['uid-b', now + 30_000],
+      ['uid-c', now + 60_000],
+    ])
+    const chosen = chooseRotating(pool, 0, cooled, now)
+    expect(chosen?.credential.uid).toBe('uid-b')
+  })
+
+  it('prefers a live token over an expired one, even under rotation', () => {
+    const expiredA = credential('uid-a', { expiresAtMs: now - 1 })
+    const mixed = [expiredA, credential('uid-b'), credential('uid-c')]
+    const chosen = chooseRotating(mixed, 0, new Map(), now)
+    // uid-a is expired, so it is dropped from the live set and rotation starts
+    // from the first *live* account.
+    expect(chosen?.credential.uid).toBe('uid-b')
+  })
+
+  it('is stable for a single account regardless of cursor', () => {
+    for (const cursor of [0, 1, 7]) {
+      const chosen = chooseRotating([credential('uid-a')], cursor, new Map(), now)
+      expect(chosen?.credential.uid).toBe('uid-a')
+    }
+  })
+})
+
+describe('failure cooldown via the store', () => {
+  it('parks a failed account out of the next selection', async () => {
+    await writeCredential(credential('uid-a'))
+    await writeCredential(credential('uid-b'))
+    const store = createCredentialStore()
+
+    store.noteFailure('uid-a', Date.now() + 60_000)
+    const current = await store.current()
+    expect(current?.uid).toBe('uid-b')
+  })
+
+  it('clears naturally when the cooldown passes', async () => {
+    await writeCredential(credential('uid-a'))
+    await writeCredential(credential('uid-b'))
+    const store = createCredentialStore()
+
+    store.noteFailure('uid-a', Date.now() + 1)
+    await new Promise(resolve => setTimeout(resolve, 10))
+    const current = await store.current()
+    // After the deadline passes, uid-a is ready again and (cursor 0) is picked.
+    expect(current?.uid).toBe('uid-a')
+  })
+})
+
+describe('session affinity', () => {
+  it('keeps one conversation on one account', async () => {
+    await writeCredential(credential('uid-a'))
+    await writeCredential(credential('uid-b'))
+    const store = createCredentialStore()
+
+    const first = await store.resolve('session-1')
+    const second = await store.resolve('session-1')
+
+    // Rotation would move to uid-b on the second call; affinity must keep the
+    // conversation pinned to whichever account it landed on first.
+    expect(first.uid).toBe('uid-a')
+    expect(second.uid).toBe(first.uid)
+  })
+
+  it('does not let affinity bypass a cooled account', async () => {
+    await writeCredential(credential('uid-a'))
+    await writeCredential(credential('uid-b'))
+    const store = createCredentialStore()
+
+    const first = await store.resolve('session-1')
+    expect(first.uid).toBe('uid-a')
+    // uid-a fails, so the next turn in the same conversation must NOT keep using
+    // it — affinity is subordinated to cooldown.
+    store.noteFailure('uid-a', Date.now() + 60_000)
+    const second = await store.resolve('session-1')
+    expect(second.uid).toBe('uid-b')
+  })
+
+  it('treats distinct conversations independently', async () => {
+    await writeCredential(credential('uid-a'))
+    await writeCredential(credential('uid-b'))
+    const store = createCredentialStore()
+
+    const one = await store.resolve('session-1')
+    const two = await store.resolve('session-2')
+    // Two conversations rotate independently, so they land on different accounts
+    // (cursor advances once per un-pinned selection).
+    expect(one.uid).toBe('uid-a')
+    expect(two.uid).toBe('uid-b')
+  })
+
+  it('does not bind affinity for a session-less request', async () => {
+    await writeCredential(credential('uid-a'))
+    await writeCredential(credential('uid-b'))
+    const store = createCredentialStore()
+
+    // No session key → pure rotation, no pin created, so the second call moves on.
+    const first = await store.resolve()
+    const second = await store.resolve()
+    expect(first.uid).toBe('uid-a')
+    expect(second.uid).toBe('uid-b')
   })
 })

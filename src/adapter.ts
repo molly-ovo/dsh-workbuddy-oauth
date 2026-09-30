@@ -296,7 +296,14 @@ function toPiModel(info: WorkBuddyModelInfo, baseUrl: string, observed?: WorkBud
     maxTokens: info.maxTokens,
     // pi-ai cannot infer WorkBuddy's field spelling from the shim's random
     // loopback URL, so name the upstream-required field explicitly.
-    compat: { maxTokensField: 'max_tokens' },
+    // `sendSessionAffinityHeaders` makes pi-ai forward DSH's `sessionId` to the
+    // shim as `x-session-id`; the shim uses it to pin a conversation to one
+    // account (session affinity), and never forwards it upstream.
+    compat: {
+      maxTokensField: 'max_tokens',
+      sendSessionAffinityHeaders: true,
+      sessionAffinityFormat: 'openrouter',
+    },
   } as unknown as Model<Api>
 }
 

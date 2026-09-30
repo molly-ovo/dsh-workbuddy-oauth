@@ -52,18 +52,19 @@ connect 复用桌面 App 的登录态，因此必须：
 | `src/refresh.ts` | 令牌刷新（单飞 + 跨进程锁 + 惰性触发） |
 | `src/fingerprint.ts` | 设备指纹按 uid 稳定派生 |
 | `src/identity.ts` | 出站身份：**配置驱动**，不读桌面端 |
-| `src/store.ts` | 凭据选择（移植代码消费的接缝） |
+| `src/store.ts` | 凭据选择（轮转选号 + 失败冷却 + 会话粘性） |
+| `src/account-state.ts` | 账号启用 / 停用状态（独立落盘） |
 | `src/upstream.ts` | 上游 HTTP 客户端（SSE、目录、积分）—— 移植自 connect |
-| `src/shim.ts` | 回环 OpenAI 兼容端点 —— 移植自 connect |
+| `src/shim.ts` | 回环 OpenAI 兼容端点 —— 移植自 connect；含失败冷却 |
 | `src/adapter.ts` | pi-ai provider 适配 —— 移植自 connect |
 | `src/catalog.ts` | 模型目录 —— 移植自 connect |
 | `src/index.ts` | 插件装配 + provider 注册 + 路由挂载 |
-| `src/commands.ts` | `/wb-login` `/wb-status` `/wb-logout` |
+| `src/commands.ts` | `/wb-login` `/wb-status` `/wb-logout` `/wb-account` |
 | `src/probe-service.ts` | 推理档位探测编排（队列 + 授权 + 账号重查） |
 | `src/status-paths.ts` `src/web-status.ts` `src/control-route.ts` | 状态文档 + 控制路由（回环 + 进程内 key） |
 | `src/client/` | 设置页卡片 + composer 探测控件（客户端 bundle） |
 
-结构验证：`tsc`（host + client）零错误；**140 个测试全部通过**；`tsdown` 构建产出 `lib/index.js`（170 KB）+ `lib/client.js`（29 KB）。
+结构验证：`tsc`（host + client）零错误；**169 个测试全部通过**；`tsdown` 构建产出 `lib/index.js`（179 KB）+ `lib/client.js`（29 KB）。
 
 防风控设计见 [`RISK-CONTROL.md`](./RISK-CONTROL.md) —— 对照同类项目的实测结论，说明每条规则借鉴自哪里。
 

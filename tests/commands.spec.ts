@@ -113,17 +113,17 @@ function deps(overrides: Record<string, unknown> = {}) {
 }
 
 describe('registration', () => {
-  it('registers the three commands', () => {
+  it('registers the four commands', () => {
     const { ctx, definitions } = fakeContext()
     registerCommands(ctx, fakeLogins() as never, deps() as never)
 
-    expect([...definitions.keys()].sort()).toEqual(['wb-login', 'wb-logout', 'wb-status'])
+    expect([...definitions.keys()].sort()).toEqual(['wb-account', 'wb-login', 'wb-logout', 'wb-status'])
   })
 
   it('returns disposers that unregister', () => {
     const { ctx, definitions } = fakeContext()
     const disposers = registerCommands(ctx, fakeLogins() as never, deps() as never)
-    expect(definitions.size).toBe(3)
+    expect(definitions.size).toBe(4)
     for (const dispose of disposers) dispose()
     expect(definitions.size).toBe(0)
   })
@@ -369,5 +369,76 @@ describe('renderAccounts', () => {
     const text = renderAccounts([credential('uid-a', { expiresAtMs: Date.now() - 1 })])
     expect(text).toContain('已过期')
     expect(text).toContain('自动刷新')
+  })
+
+  it('marks a disabled account', () => {
+    const text = renderAccounts([credential('uid-a', { nickname: '号一' })], new Set(['uid-a']))
+    expect(text).toContain('已停用')
+  })
+})
+
+describe('/wb-account', () => {
+  it('lists accounts with no argument', async () => {
+    const { ctx, definitions } = fakeContext()
+    await writeCredential(credential('uid-a', { nickname: '号一' }))
+    await writeCredential(credential('uid-b', { nickname: '号二' }))
+    registerCommands(ctx, fakeLogins() as never, deps() as never)
+
+    const result = await run(definitions, 'wb-account')
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('号一')
+    expect(result.text).toContain('号二')
+  })
+
+  it('disables an account and marks it in the list', async () => {
+    const { ctx, definitions } = fakeContext()
+    await writeCredential(credential('uid-a', { nickname: '号一' }))
+    registerCommands(ctx, fakeLogins() as never, deps() as never)
+
+    const result = await run(definitions, 'wb-account', 'disable uid-a')
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('已停用')
+    expect(result.text).toContain('号一')
+  })
+
+  it('re-enables a disabled account', async () => {
+    const { ctx, definitions } = fakeContext()
+    await writeCredential(credential('uid-a', { nickname: '号一' }))
+    registerCommands(ctx, fakeLogins() as never, deps() as never)
+    await run(definitions, 'wb-account', 'disable uid-a')
+
+    const result = await run(definitions, 'wb-account', 'enable uid-a')
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('已启用')
+  })
+
+  it('rejects an unrecognized verb', async () => {
+    const { ctx, definitions } = fakeContext()
+    registerCommands(ctx, fakeLogins() as never, deps() as never)
+
+    const result = await run(definitions, 'wb-account', 'freeze uid-a')
+    expect(result.kind).toBe('error')
+    expect(result.text).toContain('无法识别动作')
+  })
+
+  it('refuses to guess the target among several accounts', async () => {
+    const { ctx, definitions } = fakeContext()
+    await writeCredential(credential('uid-a'))
+    await writeCredential(credential('uid-b'))
+    registerCommands(ctx, fakeLogins() as never, deps() as never)
+
+    const result = await run(definitions, 'wb-account', 'disable')
+    expect(result.kind).toBe('error')
+    expect(result.text).toContain('请指定要操作的 uid 前缀')
+  })
+
+  it('reports an unmatched selector', async () => {
+    const { ctx, definitions } = fakeContext()
+    await writeCredential(credential('uid-a'))
+    registerCommands(ctx, fakeLogins() as never, deps() as never)
+
+    const result = await run(definitions, 'wb-account', 'disable zzz')
+    expect(result.kind).toBe('error')
+    expect(result.text).toContain('没有匹配')
   })
 })

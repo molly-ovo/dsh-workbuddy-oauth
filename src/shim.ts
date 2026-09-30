@@ -23,6 +23,33 @@ import type { WorkBuddyCatalog } from './catalog.ts'
 import { hostIsLoopback, originIsLoopback } from './loopback.ts'
 import { extractDisplayErrorMessage, prepareChatBody, WorkBuddyUpstreamClient, type UpstreamErrorKind } from './upstream.ts'
 
+/**
+ * How long an upstream failure parks an account out of selection.
+ *
+ * Deliberately coarse and small — the point is to stop the *next* request from
+ * immediately retrying the account that just failed, not to implement a full
+ * circuit breaker. The reference implementations' defaults (hub `cooldown=60`,
+ * panel `soft_rate=600`) are far longer because they serve concurrent clients;
+ * a personal install just needs the account out of the way briefly.
+ */
+export const FAILURE_COOLDOWN_MS: Readonly<Record<'hard_credit' | 'soft_rate' | 'server', number>> = {
+  hard_credit: 60_000,
+  soft_rate: 60_000,
+  server: 10_000,
+}
+
+/**
+ * The cooldown a failure class warrants, or `undefined` for classes that must
+ * not park an account (`session_dead` is "sign in again", `not_found`/`client`
+ * are request-shape problems that would fail identically on any account).
+ */
+export function cooldownForKind(kind: UpstreamErrorKind, now: number = Date.now()): number | undefined {
+  const ms = kind === 'hard_credit' || kind === 'soft_rate' || kind === 'server'
+    ? FAILURE_COOLDOWN_MS[kind]
+    : undefined
+  return ms === undefined ? undefined : now + ms
+}
+
 /** Minimal logger surface the plugin context already provides. */
 export interface ShimLogger {
   warn(...args: unknown[]): void
@@ -202,9 +229,18 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
       writeOpenAIError(res, 415, 'unsupported_media_type', 'Content-Type must be application/json')
       return
     }
+    // Session affinity: pi-ai forwards DSH's `sessionId` as `x-session-id`
+    // (configured in adapter.ts). The store pins that conversation to one
+    // account so a multi-turn exchange does not hop accounts mid-context.
+    // This header is internal (pi-ai → shim) and never forwarded upstream.
+    const affinityHeader = req.headers['x-session-id']
+    const sessionKey = typeof affinityHeader === 'string' && affinityHeader !== ''
+      ? affinityHeader
+      : undefined
+
     let credential
     try {
-      credential = await store.resolve()
+      credential = await store.resolve(sessionKey)
     } catch (error: unknown) {
       writeOpenAIError(res, 401, 'not_signed_in', String(error))
       return
@@ -218,6 +254,13 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
     const result = await client.chatStream(credential, prepared, controller.signal)
 
     if (!result.ok) {
+      // Park the account out of selection when the failure is account-shaped.
+      // The next request then rotates to another account instead of hitting the
+      // same wall immediately. Request-shape failures (client/not_found) and
+      // session-dead are deliberately not cooled.
+      const until = cooldownForKind(result.kind)
+      if (until !== undefined) store.noteFailure(credential.uid, until)
+
       const detail = extractDisplayErrorMessage(result.message) ?? result.message.slice(0, 400)
       // The host adapter classifies any error text containing a bare
       // `401`/`403` word as AUTH, which would mask business errors (safety
