@@ -92,14 +92,17 @@ describe('begin', () => {
     const fetchImpl = stubFetch(happyRoutes)
     const client = new LoginClient({ fetchImpl })
 
-    await expect(client.begin('cn')).resolves.toEqual({
-      region: 'cn',
-      state: 'st-1',
-      url: 'https://auth.example/1',
-    })
-    // CN's API host and web origin are different domains by design.
+    const request = await client.begin('cn')
+    expect(request.region).toBe('cn')
+    expect(request.state).toBe('st-1')
+    // The URL the upstream issued is preserved; the two app parameters are added
+    // on top of it (asserted in detail by the dedicated test below).
+    expect(request.url.startsWith('https://auth.example/1')).toBe(true)
+    // CN's sign-in host, which is where the desktop app's page lives.
+    // The platform is `workbuddy`, not `CLI`: a CLI-scoped state makes the page's
+    // phone-login (OneID) flow reject its token as "无效的token". See AUTH_PLATFORM.
     expect(fetchImpl.mock.calls[0]?.[0]).toBe(
-      'https://copilot.tencent.com/v2/plugin/auth/state?platform=CLI',
+      'https://www.workbuddy.cn/v2/plugin/auth/state?platform=workbuddy',
     )
   })
 
@@ -113,7 +116,68 @@ describe('begin', () => {
   it('targets the international host for the global region', async () => {
     const fetchImpl = stubFetch(happyRoutes)
     await new LoginClient({ fetchImpl }).begin('global')
-    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://www.workbuddy.ai/v2/plugin/auth/state?platform=CLI')
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://www.workbuddy.ai/v2/plugin/auth/state?platform=workbuddy')
+  })
+
+  it('hands back the official-shaped URL the desktop app opens', async () => {
+    // The upstream echoes only `platform` and `state`; the app appends `version`
+    // and a per-attempt `loginSessionId`, and phone login needs the latter.
+    const fetchImpl = stubFetch([
+      {
+        match: '/auth/state',
+        reply: () => envelope({
+          code: 0,
+          data: {
+            state: 'st-1',
+            authUrl: 'https://www.workbuddy.cn/login/?platform=workbuddy&state=st-1',
+          },
+        }),
+      },
+    ])
+    const request = await new LoginClient({ fetchImpl }).begin('cn')
+    const url = new URL(request.url)
+
+    expect(url.pathname).toBe('/login/')
+    expect(url.searchParams.get('platform')).toBe('workbuddy')
+    expect(url.searchParams.get('state')).toBe('st-1')
+    expect(url.searchParams.get('version')).toBe('5.5.6')
+    expect(url.searchParams.get('loginSessionId')).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it('gives each attempt its own loginSessionId', async () => {
+    // It is a per-attempt correlation id, so two sign-ins must not share one.
+    const fetchImpl = stubFetch([
+      {
+        match: '/auth/state',
+        reply: () => envelope({
+          code: 0,
+          data: { state: 'st-1', authUrl: 'https://www.workbuddy.cn/login/?platform=workbuddy&state=st-1' },
+        }),
+      },
+    ])
+    const client = new LoginClient({ fetchImpl })
+    const first = new URL((await client.begin('cn')).url).searchParams.get('loginSessionId')
+    const second = new URL((await client.begin('cn')).url).searchParams.get('loginSessionId')
+    expect(first).not.toBe(second)
+  })
+
+  it('keeps version and loginSessionId the upstream already supplied', async () => {
+    // If the upstream starts returning them, its values win over ours.
+    const fetchImpl = stubFetch([
+      {
+        match: '/auth/state',
+        reply: () => envelope({
+          code: 0,
+          data: {
+            state: 'st-1',
+            authUrl: 'https://www.workbuddy.cn/login/?platform=workbuddy&state=st-1&version=9.9.9&loginSessionId=upstream-id',
+          },
+        }),
+      },
+    ])
+    const url = new URL((await new LoginClient({ fetchImpl }).begin('cn')).url)
+    expect(url.searchParams.get('version')).toBe('9.9.9')
+    expect(url.searchParams.get('loginSessionId')).toBe('upstream-id')
   })
 })
 
@@ -257,7 +321,8 @@ describe('anti-abuse rules on the sign-in flow', () => {
     await client.poll(state)
 
     const pollUrl = fetchImpl.mock.calls[1]?.[0] ?? ''
-    expect(pollUrl.startsWith('https://copilot.tencent.com')).toBe(true)
+    // CN's sign-in host, which is the host the state was issued by.
+    expect(pollUrl.startsWith('https://www.workbuddy.cn')).toBe(true)
     expect(pollUrl).not.toContain('workbuddy.ai')
   })
 

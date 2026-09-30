@@ -17,10 +17,65 @@
  * @module dsh-workbuddy-standalone/oauth
  */
 
+import { randomUUID } from 'node:crypto'
 import { regionEndpoints, type WorkBuddyRegion } from './region.ts'
 
 /** User agent the login endpoints expect. Do not substitute the plugin's own. */
 export const LOGIN_USER_AGENT = 'CLI/2.63.2 CodeBuddy/2.63.2'
+
+/**
+ * The `platform` value the sign-in request asks for.
+ *
+ * **Not `CLI`.** The desktop app's own authorization URL reports
+ * `platform=workbuddy`, and phone-number sign-in on the resulting page fails with
+ * `无效的token` (`sl_…`, a OneID token) when the page is opened for a
+ * `CLI`-scoped state — measured by comparing the two URLs. `CLI` is what both
+ * reference implementations send, so this diverges from them deliberately: they
+ * expose an OpenAI-compatible gateway where the CLI flow is the whole product,
+ * while this plugin is signing in on behalf of a desktop-app user.
+ */
+export const AUTH_PLATFORM = 'workbuddy'
+
+/** Desktop-app version the authorization URL advertises, matching the app. */
+const AUTH_URL_VERSION = '5.5.6'
+
+/**
+ * Add the two query parameters the desktop app's authorization URL carries.
+ *
+ * The state endpoint echoes back only `platform` and `state` — it ignores
+ * `version` and `loginSessionId` when they are sent on the request, and does not
+ * mint them itself (verified against the live endpoint). The desktop app
+ * therefore appends them client-side, and `loginSessionId` is a fresh UUID each
+ * time the app opens the page, so it is a per-attempt correlation id rather than
+ * server state.
+ *
+ * `loginSessionId` is what lets the phone-login (OneID) path correlate the page
+ * with the client that opened it; without it the page's phone flow rejects the
+ * token. A malformed URL is returned unchanged rather than throwing: a login page
+ * that opens is strictly better than a hard failure, and the upstream is the
+ * authority on what it issued.
+ *
+ * @param authUrl - the URL the state endpoint returned.
+ * @param region - selects the advertised app version.
+ * @returns the URL with `version` and `loginSessionId` present.
+ */
+export function officialAuthUrl(authUrl: string, region: WorkBuddyRegion): string {
+  let parsed: URL
+  try {
+    parsed = new URL(authUrl)
+  } catch {
+    return authUrl
+  }
+  // Only fill them in when absent, so a future upstream that starts returning
+  // them keeps its own values.
+  if (!parsed.searchParams.has('version')) {
+    parsed.searchParams.set('version', region === 'global' ? '5.5.2' : AUTH_URL_VERSION)
+  }
+  if (!parsed.searchParams.has('loginSessionId')) {
+    parsed.searchParams.set('loginSessionId', randomUUID())
+  }
+  return parsed.href
+}
 
 /**
  * Minimum gap between two polls of the same state.
@@ -235,9 +290,11 @@ export class LoginClient {
 
   /** Step 1 — ask the upstream for a `state` and the authorization URL. */
   async begin(region: WorkBuddyRegion): Promise<AuthorizationRequest> {
-    const { base } = regionEndpoints(region)
+    // `loginBase`, not `base`: the host a state is issued on is the host the
+    // login page (and every follow-up call for that state) lives on.
+    const { loginBase } = regionEndpoints(region)
     const data = await this.call<{ state?: unknown; authUrl?: unknown }>(
-      `${base}/v2/plugin/auth/state?platform=CLI`,
+      `${loginBase}/v2/plugin/auth/state?platform=${AUTH_PLATFORM}`,
       region,
       { method: 'POST', body: '{}' },
     )
@@ -248,7 +305,10 @@ export class LoginClient {
       throw new Error('上游未返回 authUrl，登录无法继续。')
     }
     this.pending.set(data.state, { region, createdAt: this.now() })
-    return { region, state: data.state, url: data.authUrl }
+    // The upstream echoes `platform` and `state` but omits the two parameters the
+    // desktop app's own page carries (`version`, `loginSessionId`); see
+    // {@link officialAuthUrl}.
+    return { region, state: data.state, url: officialAuthUrl(data.authUrl, region) }
   }
 
   /**
@@ -295,13 +355,14 @@ export class LoginClient {
     entry.lastPolledAt = this.now()
 
     const region = entry.region
-    const { base } = regionEndpoints(region)
+    // The state was issued by this host, so it must be redeemed here.
+    const { loginBase } = regionEndpoints(region)
     const data = await this.call<{
       accessToken?: unknown
       refreshToken?: unknown
       expiresIn?: unknown
       domain?: unknown
-    }>(`${base}/v2/plugin/auth/token?state=${encodeURIComponent(state)}`, region, { method: 'GET' })
+    }>(`${loginBase}/v2/plugin/auth/token?state=${encodeURIComponent(state)}`, region, { method: 'GET' })
 
     if (typeof data.accessToken !== 'string' || data.accessToken === '') {
       throw new LoginPendingError('登录尚未完成：token 端点还没有返回 accessToken。')
@@ -317,9 +378,9 @@ export class LoginClient {
   /** Step 3 — read the account identity bound to this authorization. */
   async account(state: string, accessToken: string): Promise<AccountInfo> {
     const entry = this.requirePending(state)
-    const { base } = regionEndpoints(entry.region)
+    const { loginBase } = regionEndpoints(entry.region)
     const data = await this.call<{ uid?: unknown; enterpriseId?: unknown; nickname?: unknown }>(
-      `${base}/v2/plugin/login/account?state=${encodeURIComponent(state)}`,
+      `${loginBase}/v2/plugin/login/account?state=${encodeURIComponent(state)}`,
       entry.region,
       { method: 'GET', token: accessToken },
     )
