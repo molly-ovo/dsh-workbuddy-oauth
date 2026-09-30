@@ -1,0 +1,7 @@
+node_modules/
+lib/
+dist/
+*.log
+
+# 上游参照 clone —— 只读参考，不随仓库分发
+.upstream/

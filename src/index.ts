@@ -1,0 +1,387 @@
+/**
+ * WorkBuddy models for DeepSeek Harness, signed in through this plugin's own
+ * OAuth flow.
+ *
+ * ## What this is, relative to `dsh-workbuddy-connect`
+ *
+ * The provider, adapter, shim and upstream client are ported from connect (MIT)
+ * and keep its wire behavior, which has been exercised against the live
+ * endpoint. What differs is confined to the credential and identity seams:
+ *
+ * | Concern | connect | here |
+ * |---|---|---|
+ * | Credential | read + decrypt the desktop app's file | this plugin's OAuth flow |
+ * | Outbound identity | read the installed app's version | configuration value |
+ * | Accounts | one (whichever the app is signed into) | one per stored file |
+ *
+ * Consequently there is no desktop-credential decryption, no Electron
+ * discovery, no process heartbeat, and no app-bundle parsing in this plugin.
+ *
+ * ## Structure
+ *
+ * One provider id (`workbuddy`), parameterized by region at request time rather
+ * than duplicated per region. Connect registers two providers because each
+ * variant is tied to a different installed app; this plugin has no such tie, so
+ * a single provider keeps the settings surface and the model picker smaller.
+ * The region still travels with each credential, so a domestic and an
+ * international account can coexist.
+ *
+ * @module dsh-workbuddy-standalone
+ */
+
+import type { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
+import { resolveImageAttachmentAccess } from '@deepseek-ai/dsh-llm'
+import type {} from '@deepseek-ai/dsh-attachment'
+import { createWorkBuddyAdapter } from './adapter.ts'
+import { FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, WorkBuddyCatalog } from './catalog.ts'
+import { createWorkBuddyShim } from './shim.ts'
+import { createCredentialStore } from './store.ts'
+import { WorkBuddyUpstreamClient } from './upstream.ts'
+import { credentialFromLogin, displayNameOf } from './credentials.ts'
+import { LoginClient } from './oauth.ts'
+import { regionEndpoints, type WorkBuddyRegion } from './region.ts'
+import { saveAccount } from './store.ts'
+import { registerCommands, type UserQuestionsService } from './commands.ts'
+import { PLUGIN_VERSION } from './version.ts'
+import type { WorkBuddyModelInfo } from './catalog.ts'
+
+export { PLUGIN_VERSION } from './version.ts'
+export { deriveId, deviceHeaders, requestId } from './fingerprint.ts'
+export {
+  credentialFromLogin,
+  displayNameOf,
+  listCredentials,
+  type WorkBuddyCredential,
+} from './credentials.ts'
+export { LoginClient, LoginPendingError, LoginExpiredError, parseRegionInput } from './oauth.ts'
+export { ALL_REGIONS, regionEndpoints, regionOfDomain, type WorkBuddyRegion } from './region.ts'
+export { createCredentialStore, chooseCredential, NotSignedInError } from './store.ts'
+export { createWorkBuddyAdapter } from './adapter.ts'
+export { createWorkBuddyShim } from './shim.ts'
+export { FALLBACK_WORKBUDDY_MODELS, FALLBACK_WORKBUDDY_AI_MODELS, WorkBuddyCatalog } from './catalog.ts'
+export type { WorkBuddyModelInfo } from './catalog.ts'
+
+/** Stable Cordis plugin name. */
+export const name = 'llm-workbuddy-standalone'
+
+/** The model registry required before the provider can register. */
+export const inject = ['llm', 'commands']
+
+/**
+ * Provider ids.
+ *
+ * **Namespaced deliberately, and not `workbuddy` / `workbuddy-ai`.** An adapter
+ * is registered per provider id and a duplicate is a hard error
+ * (`an adapter for provider "workbuddy" is already registered`), so a plain
+ * `workbuddy` collides with `dsh-workbuddy-connect` — which claims exactly those
+ * two ids — and makes this plugin's models silently unavailable whenever both
+ * are installed. That is the expected setup for migration, so the collision is
+ * not hypothetical: it happened on the first install.
+ *
+ * The prefix also keeps the two plugins' model groups distinguishable in the
+ * picker, which is what a user comparing them needs.
+ */
+export const WORKBUDDY_PROVIDER = 'workbuddy-standalone'
+
+/** Provider id for the international region. */
+export const WORKBUDDY_AI_PROVIDER = 'workbuddy-standalone-ai'
+
+/**
+ * Provider id for one region.
+ *
+ * Two ids, not one: the upstreams advertise overlapping model ids, and a single
+ * provider id would make the descriptor for a model depend on which region
+ * happened to register last.
+ */
+export function providerIdFor(region: WorkBuddyRegion): string {
+  return region === 'global' ? WORKBUDDY_AI_PROVIDER : WORKBUDDY_PROVIDER
+}
+
+/** Stream idle timeout, matching the ported client's expectations. */
+export const WORKBUDDY_STREAM_IDLE_TIMEOUT_MS = 300_000
+
+/** How often to re-read credentials to notice a sign-in that happened while running, in ms. */
+const CREDENTIAL_POLL_MS = 15_000
+
+/** Configuration schema. */
+export interface Config {
+  /** Desktop-app version to claim in the User-Agent; empty uses the built-in default. */
+  appVersion?: string
+  /** CLI version to claim; empty omits the `CLI/…` User-Agent token. */
+  cliVersion?: string
+  /** Region to sign in to when no argument is given. */
+  region?: string
+}
+
+export const Config: z<Config> = z.object({
+  appVersion: z.string().default(''),
+  cliVersion: z.string().default(''),
+  region: z.string().default('cn'),
+})
+
+/** One region's live runtime. */
+interface RegionRuntime {
+  region: WorkBuddyRegion
+  client: WorkBuddyUpstreamClient
+  catalog: WorkBuddyCatalog
+  store: ReturnType<typeof createCredentialStore>
+}
+
+/**
+ * Pick the fallback roster for a region.
+ *
+ * Used only until the first successful fetch; the live catalog replaces it.
+ */
+function fallbackFor(region: WorkBuddyRegion): readonly WorkBuddyModelInfo[] {
+  return region === 'global' ? FALLBACK_WORKBUDDY_AI_MODELS : FALLBACK_WORKBUDDY_MODELS
+}
+
+/** Build one region's runtime. */
+function createRegionRuntime(region: WorkBuddyRegion, identity: { appVersion?: string; cliVersion?: string }): RegionRuntime {
+  const client = new WorkBuddyUpstreamClient({ identity })
+  const catalog = new WorkBuddyCatalog(fallbackFor(region))
+  // Region-scoped: a credential is only valid against its own upstream host, so
+  // a store must never hand the international service a domestic token.
+  const store = createCredentialStore({ region })
+  return { region, client, catalog, store }
+}
+
+/**
+ * Refresh one region's catalog from the upstream, if an account exists.
+ *
+ * Failures are swallowed into a log line: a network problem must not stop the
+ * provider from registering, and the fallback roster keeps working meanwhile.
+ *
+ * @param reason - Why the refresh is happening. A periodic poll passes
+ *   `'poll'` and stays quiet when nothing changed, so the log does not fill
+ *   with one identical line every interval; a user-triggered refresh (after a
+ *   sign-in) passes `'login'` and always reports, because the user is waiting
+ *   for exactly that confirmation.
+ * @returns whether the catalog changed (callers emit an adapter update then).
+ */
+async function refreshCatalog(
+  ctx: Context,
+  runtime: RegionRuntime,
+  log: (message: string) => void,
+  reason: 'startup' | 'login' | 'poll' = 'poll',
+): Promise<boolean> {
+  const label = regionEndpoints(runtime.region).label
+  // Ask the store rather than picking a credential here: the store owns the
+  // region filter and the selection rule, and duplicating either would let the
+  // catalog be fetched with one account while requests are served by another.
+  const credential = await runtime.store.current()
+  if (credential === undefined) {
+    // No account for this region: hide the group rather than offering models
+    // that can only fail on the first message.
+    const changed = runtime.catalog.setVisible(false)
+    if (changed && reason !== 'poll') log(`${label}：无可用账号，模型分组已隐藏。`)
+    return changed
+  }
+  const becameVisible = runtime.catalog.setVisible(true)
+
+  try {
+    const models = await runtime.client.fetchModels(credential)
+    if (models.length === 0) {
+      if (reason !== 'poll') log(`${label}：上游返回空模型列表，保留内置回落表。`)
+      return becameVisible
+    }
+    // `catalog.set` returns void, so the change check happens here rather than
+    // by modifying the ported catalog. Comparing the ids is enough: the poll
+    // exists to notice models appearing or disappearing, not to notice
+    // reordered metadata.
+    const before = runtime.catalog.current().map((model) => model.id).join(',')
+    runtime.catalog.set(models)
+    const after = runtime.catalog.current().map((model) => model.id).join(',')
+    const changed = before !== after
+    // A poll that changed nothing is not worth a line, but a startup or a
+    // sign-in always is: those are the moments a user checks the log to see
+    // whether the plugin worked.
+    if (changed || reason !== 'poll') log(`${label}：已同步 ${models.length} 个模型。`)
+    return changed || becameVisible
+  } catch (error: unknown) {
+    // Failures are logged at every reason: a repeated failure is the signal
+    // that something is actually broken, unlike a repeated success.
+    log(
+      `${label}：模型列表拉取失败，保留内置回落表（${error instanceof Error ? error.message : String(error)}）。`,
+    )
+    return becameVisible
+  }
+}
+
+/**
+ * Plugin entry point.
+ *
+ * Wires one provider, its loopback shim, and the credential-driven catalog
+ * lifecycle. Nothing here reads the WorkBuddy desktop app.
+ */
+export function apply(ctx: Context, config: Config): void {
+  const log = (message: string): void => {
+    ctx.logger.info(`dsh-workbuddy-standalone: ${message}`)
+  }
+
+  const identity = {
+    ...(config.appVersion !== undefined && config.appVersion !== '' ? { appVersion: config.appVersion } : {}),
+    ...(config.cliVersion !== undefined && config.cliVersion !== '' ? { cliVersion: config.cliVersion } : {}),
+  }
+
+  const runtimes = [createRegionRuntime('cn', identity), createRegionRuntime('global', identity)]
+
+  /**
+   * Live login attempts, keyed by state.
+   *
+   * Held here rather than in a module global so a profile reload cannot leave a
+   * stale pending login behind.
+   */
+  const logins = new LoginClient()
+
+  /** Schedules outstanding, cleared on disposal. */
+  const timers: NodeJS.Timeout[] = []
+  let stopped = false
+
+  const shims: Array<() => Promise<void>> = []
+
+  /**
+   * Start one region's loopback endpoint, then register its provider.
+   *
+   * **Order matters**: the adapter reads the shim's origin while it is being
+   * constructed, so the listener must already hold a port. Constructing first
+   * throws `workbuddy shim has no listening address` and the whole entry fails
+   * to activate. (Connect documents this at its own call site, which is why it
+   * awaits `shim.ready` before building the adapter.)
+   */
+  const startRegion = async (runtime: RegionRuntime): Promise<void> => {
+    const { region } = runtime
+    const label = regionEndpoints(region).label
+    const shim = createWorkBuddyShim({
+      store: runtime.store,
+      client: runtime.client,
+      catalog: runtime.catalog,
+      logger: ctx.logger,
+    })
+    shims.push(() => shim.close())
+
+    try {
+      await shim.ready
+    } catch (error: unknown) {
+      ctx.logger.error(`dsh-workbuddy-standalone: ${label} 回环端点启动失败`, error)
+      return
+    }
+
+    try {
+      const result = createWorkBuddyAdapter({
+        // One provider id per region. The two upstreams offer overlapping model
+        // ids (both list `deepseek-v4.1-flash`), so a shared id would make
+        // `resolveModel` ambiguous and let a request resolve to a descriptor
+        // built for the other region's endpoint.
+        providerId: providerIdFor(region),
+        displayName: `WorkBuddy${region === 'global' ? ' AI' : ''}`,
+        shim,
+        store: runtime.store,
+        catalog: runtime.catalog,
+        resolveAttachments: () => ctx.get('attachments'),
+        resolveImageAccess: (attachments, ref) =>
+          resolveImageAttachmentAccess(
+            attachments,
+            (hostPath) => ctx.get('fs')?.processPathFromHostPath(hostPath),
+            ref,
+          ),
+      })
+
+      const release = ctx.llm.registerAdapter([providerIdFor(region)], result.adapter)
+      try {
+        ctx.effect(() => () => {
+          release()
+          void shim.close()
+        })
+      } catch {
+        // `ctx.effect` throws once the context is disposed, so the disposer it
+        // would have registered never runs; release here instead.
+        release()
+        void shim.close()
+      }
+
+      const synced = await refreshCatalog(ctx, runtime, log, 'startup')
+      if (synced) result.invalidate()
+      ctx.emit('llm/adapters-updated')
+    } catch (error: unknown) {
+      // Contained per region: one region failing must not take the other down.
+      ctx.logger.error(`dsh-workbuddy-standalone: ${label} provider 注册失败`, error)
+      void shim.close()
+    }
+  }
+
+  for (const runtime of runtimes) void startRegion(runtime)
+
+  /**
+   * Notice sign-ins that happen while DSH keeps running.
+   *
+   * Without this the model group would only appear after a restart, because the
+   * initial fetch happens once at startup.
+   *
+   * The catalog is re-fetched only when there is something new to fetch: while a
+   * region has no account, polling the upstream would be a wasted request every
+   * interval (and the upstream is the last place to spend gratuitous traffic).
+   * A region that already has a catalog is left alone — model rosters change on
+   * the order of days, and `refreshCatalog` re-fetches on the next sign-in
+   * anyway. This keeps the interval cheap and the log quiet.
+   */
+  const poll = setInterval(() => {
+    if (stopped) return
+    for (const runtime of runtimes) {
+      void runtime.store
+        .current()
+        .then(async (credential) => {
+          if (credential === undefined) {
+            // Signed out: hide the group if it is showing, and do not call out.
+            if (runtime.catalog.setVisible(false)) ctx.emit('llm/adapters-updated')
+            return
+          }
+          // A credential appeared for a region that was hidden: this is the
+          // sign-in case the interval exists for.
+          if (!runtime.catalog.isVisible()) {
+            const changed = await refreshCatalog(ctx, runtime, log, 'login')
+            if (changed) ctx.emit('llm/adapters-updated')
+          }
+        })
+        .catch((error: unknown) => {
+          ctx.logger.warn('dsh-workbuddy-standalone: 账号轮询失败', error)
+        })
+    }
+  }, CREDENTIAL_POLL_MS)
+  timers.push(poll)
+
+  /**
+   * Register the sign-in commands.
+   *
+   * `userQuestions` is read through `ctx.get` rather than declared as a
+   * dependency: it is absent in headless and ACP profiles, and injecting it
+   * would make the whole plugin refuse to load there. The command layer
+   * degrades to a text prompt when it is missing.
+   */
+  const commandDisposers = registerCommands(ctx, logins, {
+    complete: async (state) => {
+      const result = await logins.complete(state)
+      const credential = credentialFromLogin(result)
+      await saveAccount(credential)
+      // Refresh immediately so the models are selectable without waiting for
+      // the periodic poll below.
+      await Promise.all(runtimes.map((runtime) => refreshCatalog(ctx, runtime, log, 'login')))
+      ctx.emit('llm/adapters-updated')
+      return { uid: credential.uid, label: displayNameOf(credential) }
+    },
+    userQuestions: ctx.get('userQuestions') as UserQuestionsService | undefined,
+    warn: (message, error) => {
+      ctx.logger.warn(`dsh-workbuddy-standalone: ${message}`, error)
+    },
+  })
+
+  ctx.effect(() => () => {
+    stopped = true
+    for (const timer of timers) clearInterval(timer)
+    for (const dispose of commandDisposers) dispose()
+    for (const close of shims) void close()
+  })
+
+  log(`已加载 v${PLUGIN_VERSION}（自有 OAuth 登录，不读取桌面端）`)
+}

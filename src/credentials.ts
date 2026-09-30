@@ -1,0 +1,233 @@
+/**
+ * Plugin-owned credential store.
+ *
+ * Replaces `dsh-workbuddy-connect`'s desktop-credential reader. Credentials
+ * come from this plugin's own OAuth flow ({@link ./oauth.ts}) and live in one
+ * file per account under `$DSH_HOME/workbuddy-standalone/`, so:
+ *
+ * - no desktop app is required, and none is read;
+ * - several accounts can coexist (the file name carries the uid);
+ * - token refresh writes only our own file.
+ *
+ * `expiresAtMs` is epoch **milliseconds** here. The upstream OAuth call returns
+ * `expiresIn` in seconds, so conversion happens once, at this boundary.
+ *
+ * @module dsh-workbuddy-standalone/credentials
+ */
+
+import { mkdir, readFile, readdir, rm } from 'node:fs/promises'
+import { join } from 'node:path'
+import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
+import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { regionOfDomain, type WorkBuddyRegion } from './region.ts'
+import type { AccountInfo, LoginResult } from './oauth.ts'
+
+/** Directory under the Harness home that holds this plugin's state. */
+export const STATE_DIR_NAME = 'workbuddy-standalone'
+
+/** Prefix of each credential file; the remainder is the account uid. */
+export const CREDENTIAL_FILE_PREFIX = 'workbuddy-'
+
+/** On-disk format version. Readers reject anything else rather than guess. */
+const FORMAT_VERSION = 1
+
+/** A normalized credential, timestamps in epoch milliseconds. */
+export interface WorkBuddyCredential {
+  accessToken: string
+  refreshToken: string
+  /** When {@link accessToken} stops being valid. */
+  expiresAtMs: number
+  /** When {@link refreshToken} stops being usable, when the upstream reports it. */
+  refreshExpiresAtMs?: number
+  /** Upstream domain, used to derive the region and as an outbound header. */
+  domain: string
+  uid: string
+  enterpriseId?: string
+  nickname?: string
+  region: WorkBuddyRegion
+}
+
+/** What was written to disk for one account. */
+interface CredentialDocument {
+  version: typeof FORMAT_VERSION
+  credential: WorkBuddyCredential
+}
+
+/** Root directory for this plugin's state. */
+export function stateDir(): string {
+  return join(resolveDshHome(), STATE_DIR_NAME)
+}
+
+/** Directory holding one file per account. */
+export function credentialsDir(): string {
+  return join(stateDir(), 'accounts')
+}
+
+/** Absolute path of one account's credential file. */
+export function credentialPath(uid: string): string {
+  return join(credentialsDir(), `${CREDENTIAL_FILE_PREFIX}${uid}.json`)
+}
+
+/** Whether a parsed value looks like a credential document we can trust. */
+function isCredentialDocument(value: unknown): value is CredentialDocument {
+  if (typeof value !== 'object' || value === null) return false
+  const document = value as Partial<CredentialDocument>
+  if (document.version !== FORMAT_VERSION) return false
+  const credential = document.credential
+  if (typeof credential !== 'object' || credential === null) return false
+  const candidate = credential as Partial<WorkBuddyCredential>
+  return (
+    typeof candidate.accessToken === 'string' &&
+    candidate.accessToken !== '' &&
+    typeof candidate.uid === 'string' &&
+    candidate.uid !== '' &&
+    typeof candidate.domain === 'string' &&
+    typeof candidate.expiresAtMs === 'number' &&
+    Number.isFinite(candidate.expiresAtMs)
+  )
+}
+
+/**
+ * Parse one credential file.
+ *
+ * @returns The credential, or `undefined` when the file is absent, malformed
+ *   or written by an incompatible version. A damaged file is reported as
+ *   "not signed in" rather than thrown, so one bad account cannot take down
+ *   the whole pool.
+ */
+export async function readCredential(path: string): Promise<WorkBuddyCredential | undefined> {
+  let text: string
+  try {
+    text = await readFile(path, 'utf8')
+  } catch {
+    return undefined
+  }
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (!isCredentialDocument(parsed)) return undefined
+    return normalizeCredential(parsed.credential)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Fill in derived fields a stored document may predate.
+ *
+ * `region` is recomputed from `domain` rather than trusted from disk: it is a
+ * pure function of the domain, and a stale stored value would silently route
+ * requests at the wrong region.
+ */
+function normalizeCredential(stored: WorkBuddyCredential): WorkBuddyCredential {
+  return {
+    ...stored,
+    region: regionOfDomain(stored.domain),
+  }
+}
+
+/**
+ * Write one account's credential without taking the file lock.
+ *
+ * Only for callers that already hold it. `withFileLock` is not reentrant, so a
+ * caller holding the lock and then calling the locked {@link writeCredential}
+ * would deadlock against itself until the timeout.
+ */
+export async function writeCredentialUnlocked(credential: WorkBuddyCredential): Promise<string> {
+  const path = credentialPath(credential.uid)
+  const document: CredentialDocument = { version: FORMAT_VERSION, credential }
+  await mkdir(credentialsDir(), { recursive: true })
+  // 0o600: these files hold a bearer token. `dirMode` keeps the containing tree
+  // private too, in case this is the call that creates it.
+  await writeFileAtomic(path, `${JSON.stringify(document, null, 2)}\n`, {
+    mode: 0o600,
+    dirMode: 0o700,
+  })
+  return path
+}
+
+/** Write one account's credential atomically, under the file lock. */
+export async function writeCredential(credential: WorkBuddyCredential): Promise<string> {
+  const path = credentialPath(credential.uid)
+  // `withFileLock` creates a sibling lock file and therefore requires the
+  // parent directory to already exist; it does not create it.
+  await mkdir(credentialsDir(), { recursive: true })
+  return withFileLock(path, () => writeCredentialUnlocked(credential))
+}
+
+/** Remove one account's credential file. Returns whether a file was removed. */
+export async function deleteCredential(uid: string): Promise<boolean> {
+  const path = credentialPath(uid)
+  try {
+    await rm(path, { force: false })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * List every stored credential.
+ *
+ * Unreadable or unparsable files are skipped rather than failing the listing:
+ * a single damaged account must not hide the healthy ones.
+ */
+export async function listCredentials(): Promise<readonly WorkBuddyCredential[]> {
+  let names: string[]
+  try {
+    names = await readdir(credentialsDir())
+  } catch {
+    return []
+  }
+  const found: WorkBuddyCredential[] = []
+  for (const name of names) {
+    if (!name.startsWith(CREDENTIAL_FILE_PREFIX) || !name.endsWith('.json')) continue
+    const credential = await readCredential(join(credentialsDir(), name))
+    if (credential !== undefined) found.push(credential)
+  }
+  // Stable order so selection and status output do not shuffle between calls.
+  return found.sort((a, b) => a.uid.localeCompare(b.uid))
+}
+
+/**
+ * Convert a completed login into a storable credential.
+ *
+ * `expiresIn` arrives in seconds and `now` in milliseconds, so the conversion
+ * happens exactly here.
+ *
+ * @param result - Output of {@link LoginClient.complete}.
+ * @param now - Current time in epoch milliseconds; injectable for tests.
+ */
+export function credentialFromLogin(result: LoginResult, now: number = Date.now()): WorkBuddyCredential {
+  const base: WorkBuddyCredential = {
+    accessToken: result.token.accessToken,
+    refreshToken: result.token.refreshToken,
+    expiresAtMs: now + result.token.expiresIn * 1000,
+    domain: result.token.domain,
+    uid: result.account.uid,
+    region: result.region,
+  }
+  return withAccountFields(base, result.account)
+}
+
+/** Attach the optional account fields only when they carry a value. */
+function withAccountFields(
+  credential: WorkBuddyCredential,
+  account: Pick<AccountInfo, 'enterpriseId' | 'nickname'>,
+): WorkBuddyCredential {
+  return {
+    ...credential,
+    ...(account.enterpriseId !== '' ? { enterpriseId: account.enterpriseId } : {}),
+    ...(account.nickname !== '' ? { nickname: account.nickname } : {}),
+  }
+}
+
+/** Whether a credential's access token is expired or about to expire. */
+export function isExpired(credential: WorkBuddyCredential, marginMs = 60_000, now = Date.now()): boolean {
+  return credential.expiresAtMs - marginMs <= now
+}
+
+/** Human-readable account label for status output. */
+export function displayNameOf(credential: WorkBuddyCredential): string {
+  if (credential.nickname !== undefined && credential.nickname !== '') return credential.nickname
+  return credential.uid.slice(0, 8)
+}
