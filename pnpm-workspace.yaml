@@ -1,0 +1,18 @@
+# pnpm workspace configuration.
+#
+# `allowBuilds` is the security gate for install-time scripts. pnpm refuses to
+# run a dependency's build script until a decision is recorded here, and its
+# unresolved prompt makes `pnpm install` exit non-zero — which in turn makes
+# EVERY `pnpm run <script>` fail, because pnpm re-checks the install state
+# before running one. A fresh clone therefore could not even run `typecheck`.
+#
+# Both packages below are transitive dependencies (`@earendil-works/pi-ai` pulls
+# in `@google/genai`, which pulls in `protobufjs`). Neither needs a build step
+# for this plugin to work — they are consumed as published — so both are
+# recorded as `false`: an explicit "do not run", not an unanswered question.
+#
+# Set either to `true` only after checking why that package wants to run code at
+# install time.
+allowBuilds:
+  '@google/genai': false
+  protobufjs: false
