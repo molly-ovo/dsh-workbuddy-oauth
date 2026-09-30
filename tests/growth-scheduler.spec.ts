@@ -48,16 +48,21 @@ function emptyView(overrides: Partial<GrowthStatusView> = {}): GrowthStatusView 
   }
 }
 
-/** A duck-typed client: the scheduler only calls these four members. */
+/** A duck-typed client: the scheduler only calls these members. */
 function stubClient(overrides: {
   status?: () => Promise<GrowthStatusView>
   checkin?: () => Promise<{ ok: boolean; already: boolean; msg: string; code: number; status: number }>
   claim?: () => Promise<{ ok: boolean; credit: number; energy: number; msg: string }>
+  buddyInfo?: () => Promise<unknown>
+  buddyAdopt?: () => Promise<unknown>
 } = {}): GrowthClient {
   return {
     checkin: overrides.checkin ?? (async () => ({ ok: true, already: true, msg: '', code: 10001, status: 200 })),
     status: overrides.status ?? (async () => emptyView()),
     claim: overrides.claim ?? (async () => ({ ok: true, credit: 0, energy: 0, msg: '' })),
+    // Default: the account already has a buddy, so adoption is not attempted.
+    buddyInfo: overrides.buddyInfo ?? (async () => ({ code: 0, msg: 'OK', data: { name: '喵', rarity: 'SR' }, status: 200 })),
+    buddyAdopt: overrides.buddyAdopt ?? (async () => ({ outcome: 'failed', msg: 'unexpected', status: 0 })),
     redeemTier: async () => ({ code: 0, msg: '', data: undefined, status: 200 }),
     lotteryDraw: async () => ({ code: 0, msg: '', data: undefined, status: 200 }),
     travelClaim: async () => ({ code: 0, msg: '', data: { reward_credit: 0 }, status: 200 }),
@@ -256,8 +261,81 @@ describe('runGrowthSweep', () => {
   })
 })
 
-describe('readGrowthStatus', () => {
-  it('reports a per-account failure without hiding the healthy account', async () => {
+describe('buddy adoption in the pass', () => {
+  /** A view with one in-progress task, so a pass reaches upstream and reports ok. */
+  const withTask = () => emptyView({
+    tasks: [{
+      code: 'chat_5', title: '发起 5 次对话', description: '', jumpUrl: '',
+      acceptStatus: 'accepted', current: 1, target: 5, rewardCredit: 100, rewardEnergy: 0, locked: false,
+    }],
+  })
+
+  it('adopts when the account has no buddy and credits the reward', async () => {
+    const buddyAdopt = vi.fn(async () => ({ outcome: 'adopted', msg: 'OK', credit: 300, energy: 8, status: 200 }))
+    const entries = await runGrowthSweep({
+      client: stubClient({
+        status: async () => withTask(),
+        buddyInfo: async () => ({ code: 0, msg: 'OK', data: undefined, status: 200 }),
+        buddyAdopt,
+      }),
+      now: () => at(9), credentials: async () => [CREDENTIAL], disabled: async () => new Set(),
+    })
+    expect(buddyAdopt).toHaveBeenCalledTimes(1)
+    expect(entries[0]?.result?.credit).toBe(300)
+    expect(entries[0]?.result?.energy).toBe(8)
+    expect(entries[0]?.result?.lines.some(line => line.includes('已领养'))).toBe(true)
+  })
+
+  it('does not adopt when a buddy already exists', async () => {
+    // The account that already has a companion must not spend an adoption call.
+    const buddyAdopt = vi.fn()
+    await runGrowthSweep({
+      client: stubClient({
+        status: async () => withTask(),
+        buddyInfo: async () => ({ code: 0, msg: 'OK', data: { name: '暗影喵', rarity: 'SR' }, status: 200 }),
+        buddyAdopt: buddyAdopt as never,
+      }),
+      now: () => at(9), credentials: async () => [CREDENTIAL], disabled: async () => new Set(),
+    })
+    expect(buddyAdopt).not.toHaveBeenCalled()
+  })
+
+  it('reports the ineligible threshold honestly instead of faking the prerequisite', async () => {
+    // The reference satisfies "active today" by reporting a fabricated event;
+    // this path must surface the state and stop, not work around it. (There is no
+    // forgery method to assert the absence of — the guarantee is that the only
+    // calls made are the real agreement/adoption pair, which the client tests
+    // pin.)
+    const entries = await runGrowthSweep({
+      client: stubClient({
+        status: async () => withTask(),
+        buddyInfo: async () => ({ code: 0, msg: 'OK', data: undefined, status: 200 }),
+        buddyAdopt: async () => ({ outcome: 'threshold', msg: 'first_buddy task not completed yet', status: 400 }),
+      }),
+      now: () => at(9), credentials: async () => [CREDENTIAL], disabled: async () => new Set(),
+    })
+    const lines = entries[0]?.result?.lines ?? []
+    expect(lines.some(line => line.includes('未通过门槛'))).toBe(true)
+    // The rest of the pass still runs: an ineligible adoption is not a failure.
+    expect(entries[0]?.result?.ok).toBe(true)
+    expect(entries[0]?.result?.credit).toBe(0)
+  })
+
+  it('keeps going when adoption fails outright', async () => {
+    const entries = await runGrowthSweep({
+      client: stubClient({
+        status: async () => withTask(),
+        buddyInfo: async () => ({ code: 0, msg: 'OK', data: undefined, status: 200 }),
+        buddyAdopt: async () => ({ outcome: 'failed', msg: 'boom', status: 500 }),
+      }),
+      now: () => at(9), credentials: async () => [CREDENTIAL], disabled: async () => new Set(),
+    })
+    expect(entries[0]?.result?.ok).toBe(true)
+    expect(entries[0]?.result?.lines.some(line => line.includes('领养失败'))).toBe(true)
+  })
+})
+
+describe('readGrowthStatus', () => {  it('reports a per-account failure without hiding the healthy account', async () => {
     const other: WorkBuddyCredential = { ...CREDENTIAL, uid: 'uid-b', nickname: '小红' }
     let call = 0
     const client = {

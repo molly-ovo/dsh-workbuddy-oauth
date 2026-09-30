@@ -92,7 +92,31 @@ export async function runGrowthPass(
     return { uid: credential.uid, label, ok: false, credit, energy, checkedIn, lines }
   }
 
-  // 1. Settle everything already complete — the cheapest rewards first, and the
+  // 1. Adopt the first buddy when the account has none.
+  //
+  // This is a real first-party call, not telemetry: the account genuinely gains a
+  // companion, and it unblocks travel for an account that could never depart
+  // ("no active buddy"). It runs before the claim pass so a freshly adopted
+  // buddy's reward task can be claimed in the same pass. Only the reference's
+  // preceding activity-report step is skipped, so an account that is not eligible
+  // today gets an honest message instead of a fabricated prerequisite.
+  const buddy = await client.buddyInfo(credential)
+  if (buddy.code === 0 && buddy.data === undefined) {
+    const adopted = await client.buddyAdopt(credential)
+    if (adopted.outcome === 'adopted') {
+      credit += adopted.credit ?? 0
+      energy += adopted.energy ?? 0
+      lines.push(`🐱 已领养第一只 Buddy（+${adopted.credit ?? 0} 积分 +${adopted.energy ?? 0} 能量）`)
+    } else if (adopted.outcome === 'threshold') {
+      // Documented ineligible state: needs a completed conversation today. Not an
+      // error, and retrying it today would only repeat it.
+      lines.push('🐱 领养未通过门槛（上游要求当日完成一次对话）；可在桌面端聊一句后再跑 /wb-task run')
+    } else {
+      lines.push(`! 领养失败：${adopted.msg}`)
+    }
+  }
+
+  // 2. Settle everything already complete — the cheapest rewards first, and the
   //    only ones a manual desktop action makes claimable.
   const claimable = status.tasks.filter(isClaimable)
   for (const task of claimable) {
@@ -106,19 +130,19 @@ export async function runGrowthPass(
     }
   }
 
-  // 2. Report, never accept: with no event channel an accepted task can only be
+  // 3. Report, never accept: with no event channel an accepted task can only be
   //    advanced by a real desktop action, and claiming needs no acceptance.
   const pending = status.tasks.filter((task) => task.acceptStatus === 'not_accepted' && !task.locked)
   if (pending.length > 0) {
     lines.push(`ℹ ${pending.length} 个任务需在桌面端真实操作后自动点亮，本插件不做事件伪造`)
   }
 
-  // 3. Buddy travel: claim an arrived reward, depart an idle buddy.
+  // 4. Buddy travel: claim an arrived reward, depart an idle buddy.
   const travel = await runTravelPass(client, credential, status)
   lines.push(...travel.lines)
   credit += travel.credit
 
-  // 4. Streak tiers: redeem every tier that is ready; locked/claimed skip.
+  // 5. Streak tiers: redeem every tier that is ready; locked/claimed skip.
   for (const tier of status.tiers) {
     if (tier.status !== 'ready') continue
     const result = await client.redeemTier(credential, tier.tier)
@@ -133,7 +157,7 @@ export async function runGrowthPass(
     }
   }
 
-  // 5. Lottery: spend every chance the summary reports.
+  // 6. Lottery: spend every chance the summary reports.
   let chances = status.lotteryChances
   while (chances > 0) {
     const draw = await client.lotteryDraw(credential)

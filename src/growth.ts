@@ -184,6 +184,33 @@ export interface CheckinResult {
   status: number
 }
 
+/** The account's companion, once adopted. Presence of this object means "has one". */
+export interface BuddyInfo {
+  /** The live field is `instance_id`; absent on shapes that omit it. */
+  instanceId?: number
+  name: string
+  rarity: string
+}
+
+/**
+ * The business marker for "adoption threshold not met" (HTTP 400).
+ *
+ * Measured by the reference and re-checked here: the deployment answers
+ * `first_buddy task not completed yet`, which means the account has not been
+ * active enough today. It is a state to report, not an error to retry.
+ */
+const BUDDY_THRESHOLD_MARKER = 'first_buddy task not completed yet'
+
+/** The adoption attempt's outcome. */
+export interface BuddyAdoptResult {
+  /** `adopted` credited a buddy; `threshold` is the documented ineligible state. */
+  outcome: 'adopted' | 'threshold' | 'failed'
+  msg: string
+  credit?: number
+  energy?: number
+  status: number
+}
+
 /**
  * CN growth-center client over the stored credentials.
  *
@@ -346,7 +373,59 @@ export class GrowthClient {
 
   /** Claim a returned buddy's reward. */
   async travelClaim(credential: WorkBuddyCredential): Promise<GrowthEnvelope<{ reward_credit?: number }>> {
+    // Panel's client sends the arrived record's id here ("claim 必带"); this
+    // client was measured working with an empty body on a real arrived buddy, so
+    // the unverified variant is not adopted until a failure asks for it (L10).
     return this.call(credential, 'POST', '/activity/growth/buddy/travel/claim', 'growth', {})
+  }
+
+  /**
+   * Read the account's companion. `data` is `undefined` when the account has no
+   * buddy yet — which is both the adoption precondition and the reason a travel
+   * departure answers `no active buddy`.
+   */
+  async buddyInfo(credential: WorkBuddyCredential): Promise<GrowthEnvelope<BuddyInfo | undefined>> {
+    const env = await this.call<{ buddy?: unknown }>(credential, 'GET', '/activity/growth/buddy/info', 'growth')
+    return { ...env, data: parseBuddy(env.data?.buddy) }
+  }
+
+  /**
+   * Adopt the account's first companion, if it is eligible.
+   *
+   * **No forgery involved**: `buddy/agreement` and `buddy/first` are the same
+   * first-party calls the desktop client makes when the user adopts a cat, and
+   * the adoption is a real state change (the account gains a buddy, which also
+   * unblocks travel). What this deliberately does *not* do is the reference's
+   * preceding `/v2/report` step, which exists to satisfy the "active today"
+   * threshold by fabricating activity. If upstream says the threshold is not met,
+   * that is reported honestly and not retried today.
+   */
+  async buddyAdopt(credential: WorkBuddyCredential): Promise<BuddyAdoptResult> {
+    // Agreement is idempotent and must precede adoption.
+    const agreement = await this.call<unknown>(
+      credential, 'POST', '/activity/growth/buddy/agreement', 'growth', { agree: true },
+    )
+    if (agreement.code !== 0) {
+      return { outcome: 'failed', msg: agreement.msg || `agreement code=${agreement.code}`, status: agreement.status }
+    }
+    const first = await this.call<{ credit?: number; energy?: number }>(
+      credential, 'POST', '/activity/growth/buddy/first', 'growth', {},
+    )
+    if (first.code === 0) {
+      return {
+        outcome: 'adopted',
+        msg: first.msg,
+        credit: first.data?.credit ?? 0,
+        energy: first.data?.energy ?? 0,
+        status: first.status,
+      }
+    }
+    // Measured shape of "not eligible yet": HTTP 400 carrying this marker. It is
+    // a state, not an error — and retrying it the same day would only repeat it.
+    if (first.status === 400 && first.msg.toLowerCase().includes(BUDDY_THRESHOLD_MARKER)) {
+      return { outcome: 'threshold', msg: first.msg, status: first.status }
+    }
+    return { outcome: 'failed', msg: first.msg || `buddy/first code=${first.code}`, status: first.status }
   }
 
   /**
@@ -402,8 +481,28 @@ export class GrowthClient {
   }
 }
 
-/** Flatten one task row; `progress` may be nested or flat (both measured). */
-function parseTask(raw: unknown): GrowthTask {
+/**
+ * Parse `data.buddy`. Absent, `null` and an empty object all mean "no buddy".
+ *
+ * **Presence is decided by the object, not by an id field.** The live shape names
+ * the id `instance_id` (measured: `{instance_id, name, personality, rarity, …}`),
+ * while the reference's struct reads `json:"id"` — harmless there because it only
+ * tests for nil, but using that field as the parse gate made an account *with* a
+ * buddy (`暗影喵`) read as having none. The account's own travel history is what
+ * exposed it.
+ */
+function parseBuddy(raw: unknown): BuddyInfo | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+  const row = raw as Record<string, unknown>
+  const instanceId = row['instance_id']
+  return {
+    ...(typeof instanceId === 'number' ? { instanceId } : {}),
+    name: String(row['name'] ?? ''),
+    rarity: String(row['rarity'] ?? ''),
+  }
+}
+
+/** Flatten one task row; `progress` may be nested or flat (both measured). */function parseTask(raw: unknown): GrowthTask {
   const row = (raw ?? {}) as Record<string, unknown>
   const progress = (row['progress'] ?? {}) as Record<string, unknown>
   const current = typeof progress['current'] === 'number' ? progress.current : Number(row['current'] ?? 0)

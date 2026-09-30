@@ -170,6 +170,97 @@ describe('growthHeaders', () => {
   })
 })
 
+describe('GrowthClient.buddyInfo', () => {
+  it('reads presence from the object, not from an id field', () => {
+    // The live shape names the id `instance_id`; the reference's struct reads
+    // `id`, which is absent. Keying the parse on `id` made a real account with a
+    // buddy ("暗影喵") read as having none.
+    return (async () => {
+      const { client } = stubFetch([{
+        pattern: /buddy\/info$/,
+        body: {
+          code: 0, msg: 'OK',
+          data: {
+            buddy: { instance_id: 12918285, name: '暗影喵', personality: '安全守护者', rarity: 'SR' },
+            poll_interval_seconds: 300,
+          },
+        },
+      }])
+      const info = await client.buddyInfo(CREDENTIAL)
+      expect(info.data).toEqual({ instanceId: 12918285, name: '暗影喵', rarity: 'SR' })
+    })()
+  })
+
+  it('reads a null buddy as absent', async () => {
+    const { client } = stubFetch([{
+      pattern: /buddy\/info$/,
+      body: { code: 0, msg: 'OK', data: { buddy: null, poll_interval_seconds: 300 } },
+    }])
+    const info = await client.buddyInfo(CREDENTIAL)
+    expect(info.data).toBeUndefined()
+    expect(info.code).toBe(0)
+  })
+
+  it('reads a buddy whose id the server omitted as present', async () => {
+    // Presence is what gates adoption; a missing id must not hide the buddy.
+    const { client } = stubFetch([{ pattern: /buddy\/info$/, body: { code: 0, data: { buddy: { name: '喵' } } } }])
+    const info = await client.buddyInfo(CREDENTIAL)
+    expect(info.data).toEqual({ name: '喵', rarity: '' })
+  })
+})
+
+describe('GrowthClient.buddyAdopt', () => {
+  it('agrees then adopts, reporting the credited amounts', async () => {
+    const { client, calls } = stubFetch([
+      { pattern: /buddy\/agreement$/, body: { code: 0, msg: 'OK', data: {} } },
+      { pattern: /buddy\/first$/, body: { code: 0, msg: 'OK', data: { credit: 300, energy: 8 } } },
+    ])
+    const result = await client.buddyAdopt(CREDENTIAL)
+    expect(result.outcome).toBe('adopted')
+    expect(result.credit).toBe(300)
+    expect(result.energy).toBe(8)
+    // Order matters: the agreement has to be accepted first.
+    expect(calls.map(call => call.url.split('/').pop())).toEqual(['agreement', 'first'])
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ agree: true })
+  })
+
+  it('reads the documented ineligible state as a state, not an error', async () => {
+    // HTTP 400 + marker: the account has not been active enough today. Retrying
+    // it the same day only repeats it, so it must be distinguishable.
+    const { client } = stubFetch([
+      { pattern: /buddy\/agreement$/, body: { code: 0, msg: 'OK', data: {} } },
+      {
+        pattern: /buddy\/first$/,
+        status: 400,
+        body: { code: 400, msg: 'first_buddy task not completed yet' },
+      },
+    ])
+    const result = await client.buddyAdopt(CREDENTIAL)
+    expect(result.outcome).toBe('threshold')
+    expect(result.status).toBe(400)
+  })
+
+  it('reports a real rejection as a failure', async () => {
+    const { client } = stubFetch([
+      { pattern: /buddy\/agreement$/, body: { code: 0, msg: 'OK', data: {} } },
+      { pattern: /buddy\/first$/, status: 500, body: { code: 500, msg: 'boom' } },
+    ])
+    const result = await client.buddyAdopt(CREDENTIAL)
+    expect(result.outcome).toBe('failed')
+    expect(result.msg).toBe('boom')
+  })
+
+  it('stops before adopting when the agreement is refused', async () => {
+    const { client, calls } = stubFetch([
+      { pattern: /buddy\/agreement$/, body: { code: 403, msg: 'agreement required' } },
+      { pattern: /buddy\/first$/, body: { code: 0, data: { credit: 300 } } },
+    ])
+    const result = await client.buddyAdopt(CREDENTIAL)
+    expect(result.outcome).toBe('failed')
+    expect(calls.some(call => call.url.includes('buddy/first'))).toBe(false)
+  })
+})
+
 describe('GrowthClient.checkin', () => {
   it('treats a fresh claim and an already-claimed day as the same success', async () => {
     // 10001 is the normal answer when a scheduled run races the user's own
