@@ -265,8 +265,16 @@ export function isExpired(credential: WorkBuddyCredential, marginMs = 60_000, no
  */
 const PHONE_PATTERN = /(?<!\d)(?:\+?86[-\s]?)?(1[3-9]\d{9})(?!\d)/gu
 
-/** How many leading and trailing digits stay readable; the rest become `*`. */
-const PHONE_VISIBLE_DIGITS = 3
+/**
+ * How many leading and trailing digits stay readable; the rest become `*`.
+ *
+ * Two, not three. The first three digits of a mainland mobile number are the
+ * carrier prefix, not personal data — but the fourth is the first digit of the
+ * subscriber's own segment, and with three visible on each side only five
+ * digits are hidden out of eleven. Two leaves seven hidden and still tells two
+ * accounts apart at a glance.
+ */
+const PHONE_VISIBLE_DIGITS = 2
 
 /**
  * Mask any mobile number inside a display name.
@@ -280,7 +288,7 @@ const PHONE_VISIBLE_DIGITS = 3
  * the number itself is redacted.
  *
  * @param text - the raw display name.
- * @returns the name with every mobile number reduced to `3 digits + stars + 3`.
+ * @returns the name with every mobile number reduced to `2 digits + stars + 2`.
  */
 export function maskPhoneNumbers(text: string): string {
   return text.replace(PHONE_PATTERN, (whole: string, digits: string) => {
@@ -291,15 +299,60 @@ export function maskPhoneNumbers(text: string): string {
 }
 
 /**
+ * An email address, as it commonly appears in a nickname.
+ *
+ * The local part is required to be non-empty and the domain to carry at least
+ * one dot, so a bare `user@host` (an internal id, not an address) is left alone.
+ * The leading guard keeps a match from starting mid-token.
+ */
+const EMAIL_PATTERN = /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)/gu
+
+/** How many leading characters of an address's local part stay readable. */
+const EMAIL_VISIBLE_CHARS = 1
+
+/**
+ * Mask the local part of any email address inside a display name.
+ *
+ * Accounts are frequently named after the address they signed up with, and the
+ * local part is the identifying half — `alice@example.com` names a person,
+ * while `example.com` names only a provider. So the local part is reduced to its
+ * first character and the domain is kept, which is the convention users already
+ * read (`a***@example.com`) and leaves the account recognizable in a list.
+ *
+ * Like {@link maskPhoneNumbers}, this is a *display* transform only: the stored
+ * nickname keeps the real value.
+ *
+ * @param text - the raw display name.
+ * @returns the name with every address's local part masked.
+ */
+export function maskEmailAddresses(text: string): string {
+  return text.replace(EMAIL_PATTERN, (whole: string, local: string, domain: string) => {
+    const visible = local.slice(0, EMAIL_VISIBLE_CHARS)
+    const stars = '*'.repeat(Math.max(3, local.length - EMAIL_VISIBLE_CHARS))
+    return `${visible}${stars}@${domain}`
+  })
+}
+
+/**
+ * Redact every personal identifier this plugin knows how to recognize.
+ *
+ * One entry point so a new identifier type cannot be added to one surface and
+ * forgotten on another: every caller that renders a name goes through here.
+ */
+export function maskPersonalData(text: string): string {
+  return maskEmailAddresses(maskPhoneNumbers(text))
+}
+
+/**
  * Human-readable account label for status output.
  *
  * The nickname is masked rather than returned raw: an account nicknamed with its
- * own phone number would otherwise be printed verbatim by every command, the
- * settings card, and the status document.
+ * own phone number or email address would otherwise be printed verbatim by every
+ * command, the settings card, and the status document.
  */
 export function displayNameOf(credential: WorkBuddyCredential): string {
   if (credential.nickname !== undefined && credential.nickname !== '') {
-    return maskPhoneNumbers(credential.nickname)
+    return maskPersonalData(credential.nickname)
   }
   return credential.uid.slice(0, 8)
 }

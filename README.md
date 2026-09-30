@@ -1,187 +1,182 @@
 # dsh-workbuddy-standalone
 
-把 WorkBuddy 的模型接入 DeepSeek Harness 的 DSH 插件。
+把 WorkBuddy / CodeBuddy 的模型接入 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)，**自带 OAuth 设备码登录**——不读取桌面 App 的凭据文件，也不需要安装桌面 App。
 
-与 [`dsh-workbuddy-connect`](https://github.com/corrinehu/dsh-workbuddy-connect) 的**根本区别**：本插件走**自己的 OAuth 设备码登录**，不读取 WorkBuddy 桌面 App 的凭据文件。
-
----
-
-## 为什么另做一个
-
-connect 复用桌面 App 的登录态，因此必须：
-
-- 从磁盘找到 App 的凭据文件；
-- 调用 App 的 Electron 二进制**解密**它（`desktop-credential-protection.ts`，**50 KB**）；
-- 跟踪 App 的加密格式变化（5.6 起改成 `$wbEncrypted` 信封，上游多个同类项目因此失效）；
-- 依赖桌面 App 的版本号与 UA 作为出站身份。
-
-走自己的 OAuth 之后，上面四项**全部不再需要**。
-
-| | connect | 本插件 |
-|---|---|---|
-| 凭据来源 | 桌面 App 文件（读 + 解密） | **自己的 OAuth** |
-| 需要装桌面 App | ✅ 必须 | ❌ 不需要 |
-| 凭据解密代码 | ~50 KB | **0** |
-| 上游改加密格式 | 会失效 | 不受影响 |
-| 多账号 | ❌ 单账号 | ✅ 每账号一份凭据（Phase 2） |
-| 常驻进程 | 无 | **无** |
+![license](https://img.shields.io/badge/license-MIT-blue.svg)
+![tests](https://img.shields.io/badge/tests-245%20passing-brightgreen.svg)
+![node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-green.svg)
 
 ---
 
-## 状态：已完成
+## 特性
 
-多账号插件已完成并端到端验证。能力清单：
-
-| 能力 | 状态 |
+| 能力 | 说明 |
 |---|---|
-| 自有 OAuth 登录（国内版 + 国际版） | ✅ |
-| 多账号共存、轮转选号、失败冷却、会话粘性 | ✅ |
-| 账号启停 / 登出（设置页 + 命令） | ✅ |
-| 模型显隐（可逆、按 region 持久化）+ 上下文窗口 | ✅ |
-| 推理档位手动探测 | ✅ |
-| 积分余额查询（总积分） | ✅ |
-| 设置页卡片 + composer 探测控件 | ✅ |
+| **自有 OAuth 登录** | 国内版 / 国际版各一套端点，走设备码流程；不依赖桌面 App |
+| **多账号** | 每账号一份凭据，轮转选号、失败冷却、会话粘性 |
+| **账号管理** | 启用 / 停用 / 登出，命令与设置页都能操作 |
+| **模型显隐** | 可逆，按区域持久化；附带上下文窗口开关 |
+| **推理档位探测** | 手动探测某模型实际接受的档位 |
+| **积分余额** | 设置页查询总积分 |
+| **双界面** | 设置页卡片 + composer 输入区探测控件 |
 
-自动化任务（签到 / 成长 / 猫猫旅行 / 保活等）**明确不做**。
+---
 
-已实现：
+## 技术路线
 
-| 模块 | 说明 |
-|---|---|
-| `src/region.ts` | 国内版 / 国际版端点表 |
-| `src/oauth.ts` | OAuth 设备码登录（begin → 授权 → poll → account），含 TTL 与轮询限速 |
-| `src/credentials.ts` | 凭据存储（每账号一文件，原子写，0600） |
-| `src/refresh.ts` | 令牌刷新（单飞 + 跨进程锁 + 惰性触发） |
-| `src/fingerprint.ts` | 设备指纹按 uid 稳定派生 |
-| `src/identity.ts` | 出站身份：**配置驱动**，不读桌面端 |
-| `src/store.ts` | 凭据选择（轮转选号 + 失败冷却 + 会话粘性） |
-| `src/account-state.ts` | 账号启用 / 停用状态（独立落盘） |
-| `src/upstream.ts` | 上游 HTTP 客户端（SSE、目录、积分）—— 移植自 connect |
-| `src/shim.ts` | 回环 OpenAI 兼容端点 —— 移植自 connect；含失败冷却 |
-| `src/adapter.ts` | pi-ai provider 适配 —— 移植自 connect |
-| `src/catalog.ts` | 模型目录 —— 移植自 connect |
-| `src/index.ts` | 插件装配 + provider 注册 + 路由挂载 |
-| `src/commands.ts` | `/wb-login` `/wb-status` `/wb-logout` `/wb-account` |
-| `src/probe-service.ts` | 推理档位探测编排（队列 + 授权 + 账号重查） |
-| `src/status-paths.ts` `src/web-status.ts` `src/control-route.ts` | 状态文档 + 控制路由（回环 + 进程内 key） |
-| `src/client/` | 设置页卡片 + composer 探测控件（客户端 bundle） |
+本插件的定位是**不依赖桌面 App**。同类方案的凭据来源主要有三种：
 
-结构验证：`tsc`（host + client）零错误；**221 个测试全部通过**；`tsdown` 构建产出 `lib/index.js`（200 KB）+ `lib/client.js`（44 KB）。
+| 路线 | 凭据来源 | 需要桌面 App | 代表实现 |
+|---|---|---|---|
+| **本项目** | 自己的 OAuth 设备码流程 | 不需要 | — |
+| 读桌面凭据 | 桌面 App 的本地文件 | 需要 | [dsh-workbuddy-connect](https://github.com/corrinehu/dsh-workbuddy-connect) |
+| 外部代理进程 | 本地网关进程 | 视实现而定 | `workbuddy2api` 系（如 [tearslee/dsh-workbuddy2api](https://github.com/tearslee/dsh-workbuddy2api)） |
 
-防风控设计见 `docs/RISK-CONTROL.md`（本地仓库内）—— 对照同类项目的实测结论，说明每条规则借鉴自哪里。
+选择自有 OAuth 的代价是要自己维护登录流程；换来的是不依赖桌面端的安装位置、凭据加密格式与版本号。
 
-阶段划分、验收标准与当前进度见 `docs/PHASES.md`（本地仓库内）。
+上游协议与若干模块移植自 `dsh-workbuddy-connect`（MIT），出处与许可见 [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md)。
+
+---
+
+## 安装
+
+### 前置条件
+
+- DeepSeek Harness（本项目按 `@deepseek-ai/*@0.2.0-rc.1` 编译与测试）
+- Node.js `^22.19.0 || >=24.0.0`
+- 一个 WorkBuddy / CodeBuddy 账号（国内版或国际版均可）
+
+### 从本地路径安装
+
+```powershell
+dsh plugin --profile desktop add D:\Code\dsh-workbuddy-standalone
+```
+
+该命令会把包加入 profile 依赖，并因其声明了 `dsh.bundle` 而自动追加到 bundle 层栈。**装完需刷新或重启 GUI**：模型 provider 目录在进程启动时组成。
+
+手动安装（等价做法）：
+
+1. 在 `~/.dsh/profiles/<profile>/package.json` 的 `dependencies` 加入
+   `"dsh-workbuddy-standalone": "link:D:/Code/dsh-workbuddy-standalone"`
+2. 把 `dsh-workbuddy-standalone` 追加到同文件 `dsh.profile.bundles` 数组末尾
+3. 在该 profile 目录执行 `pnpm install`
+4. 重启 DSH
+
+### 确认已生效
+
+插件激活后运行 `/wb-status` 应有输出。若没有，检查该 profile 的插件行是否 `enabled`，以及 `llm-workbuddy-standalone` 是否已注册。
+
+---
 
 ## 用法
 
-登录（不需要桌面 App）：
+### 登录
 
 ```
 /wb-login [cn | global]
 ```
 
-命令会弹出一个确认框，里面**直接带可点的授权链接**——在浏览器完成授权后选「已完成授权，继续」即可，无需复制链接或重跑命令。
+命令会弹出确认框，其中**直接给出可点击的授权链接**。在浏览器完成授权后，选「已完成授权，继续」即可——不需要复制链接，也不需要重跑命令。
 
-其它命令：
+### 命令
 
 | 命令 | 作用 |
 |---|---|
+| `/wb-login [cn \| global]` | 登录（默认 `cn`） |
 | `/wb-status` | 查看已登录账号、区域、令牌有效期 |
-| `/wb-account [enable|disable] <uid 前缀>` | 启用 / 停用账号 |
+| `/wb-account [enable\|disable] <uid 前缀>` | 启用 / 停用账号 |
 | `/wb-logout [uid 前缀]` | 退出登录（只删本插件保存的凭据，不动上游账号） |
 
-登录 / 状态 / 账号管理也可在**设置页卡片**里完成（Plugins 页 → 本 bundle）。
+### 设置页
+
+登录、状态、账号管理与积分查询也可在 **设置 → 插件 → DSH WorkBuddy Standalone** 卡片中完成。composer 输入区右侧另有一个探测控件，用于探测当前模型的推理档位。
+
+> 探测会向上游发出真实请求并消耗少量积分，因此有二次确认。
 
 ---
 
-## 目录
+## 工作原理
 
 ```
-src/
-  region.ts        区域定义（cn / global）+ 端点表
-  oauth.ts         设备码登录
-  credentials.ts   凭据存储（每账号一文件）
-  refresh.ts       令牌刷新
-  fingerprint.ts   设备指纹
-  identity.ts      出站身份（配置驱动）
-  store.ts         凭据选择接缝（轮转 + 冷却 + 粘性）
-  account-state.ts 账号启停状态
-  upstream.ts      上游客户端（移植）
-  shim.ts          回环端点（移植）
-  adapter.ts       provider 适配（移植）
-  catalog.ts       模型目录（移植）
-  hidden-models.ts 模型显隐持久化
-  probe.ts / probe-store.ts / probe-service.ts  档位探测
-  status-paths.ts / web-status.ts / control-route.ts  状态文档 + 控制路由
-  commands.ts      斜杠命令（/wb-login 等）
-  index.ts         插件入口
-  client/          设置页卡片 + composer 探测控件（客户端 bundle）
-tests/              228 个测试，18 个文件
-tools/              上游诊断脚本（登录 URL、错误形状等）
-.upstream/          上游参照 clone（只读，已 gitignore）
-docs/               本地交接文档（HANDOFF / PHASES 等，不进仓库）
+DSH 模型选择器
+  └─ pi-ai adapter（注册 provider route）
+       └─ 回环端点  127.0.0.1，进程内，带一次性共享密钥
+            └─ 上游  copilot.tencent.com / www.workbuddy.ai 等
 ```
+
+- **无常驻进程、无对外端口。** 回环端点在本插件进程内，只绑 `127.0.0.1`，并校验进程内生成的共享密钥。
+- **凭据每账号一文件**，原子写入，权限 `0600`。
+- **令牌刷新惰性触发**（过期前 5 分钟），进程内单飞 + 跨进程文件锁——上游会轮换 refresh token，并发刷新会让第二个请求送出已被消费的令牌。
+- **设备指纹按 uid 稳定派生**，同账号恒定、跨账号隔离；登录流程**不带**指纹。
 
 ---
 
-## 开发
+## 隐私
 
-```powershell
-pnpm install
-pnpm run typecheck
-pnpm test
-pnpm run build
-```
+### 显示时脱敏
 
-### 验证要求（不要跳过）
+账号昵称在上游常常就是手机号或邮箱。所有会显示昵称的地方（`/wb-status`、`/wb-account`、设置页卡片、状态文档）都经过同一层脱敏：
 
-`tests/index.spec.ts` 直接驱动 `apply()`。**这不是可选的覆盖面**——本插件装上后曾因装配顺序错误而完全无法激活。
+| 类型 | 原始 | 显示 |
+|---|---|---|
+| 手机号 | `13800138000` | `13*******00` |
+| 邮箱 | `alice@example.com` | `a****@example.com` |
 
-| 层次 | 是否足够 |
+手机号只保留前 2 位与末 2 位（11 位中隐藏 7 位）；邮箱只保留本地部分首字符与域名。
+
+脱敏**只作用于显示**：凭据文件里保留原始值，功能不受影响。日志里只记录 uid 的前 8 位，从不记录昵称。
+
+### 登出会删掉什么
+
+`/wb-logout`（以及设置页的「登出」）会清除该账号的**全部**痕迹，而不只是凭据文件：
+
+| 位置 | 内容 |
 |---|---|
-| `tsc` 通过 | ❌ 不足够（类型宽松，装配顺序错误也能通过） |
-| `import` 能加载 | ❌ 不足够（**假阳性**：模块能解析不代表 `apply` 能执行） |
-| `apply()` 不抛错 | ✅ 最低要求 |
-| 真实登录 + 一次对话 | ✅ 最终验收（需真实账号） |
+| `accounts/workbuddy-<uid>.json` | 访问令牌、刷新令牌、昵称、企业 id |
+| `cooldowns.json` | 该账号的失败冷却记录 |
+| `disabled-accounts.json` | 该账号的启用 / 停用状态 |
+| `probe-<region>.json` | 该账号的推理档位探测记录 |
 
-**改动 `src/index.ts` 后必须跑 `pnpm test`。**
+这四类都以 uid 为键，只删凭据会让 uid 继续留在其余文件里——既是隐私问题（uid 是账号标识），也会在同一个账号再次登录时让旧的停用状态或探测结论悄悄生效。
 
-### 依赖说明
+所有状态都在 `$DSH_HOME/workbuddy-standalone/` 下，删除该目录即可完全重置。
 
-`@deepseek-ai/*` 与 `@earendil-works/*` 在公共 npm 上**存在但版本线冗长**，因此 `package.json` 把版本**钉死在 `0.2.0-rc.1`** —— 与当前运行的 DSH Desktop 核心（`dsh-plugin-desktop@2.0.16` / `@deepseek-ai/dsh@0.2.0-rc.1`）严格一致。
-
-`pnpm install` 默认会解析到更新的 `rc.2`，**不要放开这个钉死**：pi-ai 适配层的类型在 rc 之间有过变动，放开会让「编译通过」失去意义。
+> 注：`/wb-account disable` 是**可逆**的，只把账号移出选择，凭据与状态都保留；只有登出才会删除。
 
 ---
 
-## 设计约束
+## 配置
 
-1. **不读桌面端任何文件。** 这是本插件存在的理由。
-2. **不引入常驻进程。** 不做网关子进程 —— 那是 `dsh-workbuddy2api` 的路线，代价是多一个进程、一个端口、一层序列化。
-3. **复用 DSH 内置能力。** 调度用 `dsh-schedule`，设置用 `dsh-settings`，别自己写。
-4. **区域是一等概念。** 国内版与国际版是两套账号体系、额度互不通用，不能写死一个。
-5. **多账号是既定目标。** 因此设备指纹隔离（`fingerprint.ts`）是必要能力，不是可选项。
+插件行接受以下配置（在 profile 的 `cordis.patch.yml` 中设置）：
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `region` | `cn` | 默认区域，`cn` 或 `global` |
+| `appVersion` | `""` | 出站身份中的客户端版本号，留空用内置兜底值 |
+| `cliVersion` | `""` | 出站身份中的 CLI 版本号，留空用内置兜底值 |
 
 ---
 
-## 非目标
+## 已知限制
 
-以下内容**经评估后决定不做**，理由如下（避免将来被当作遗漏的需求重新提出）：
+- **依赖上游非公开接口。** WorkBuddy / CodeBuddy 更新后，本插件可能需要随之调整。
+- **推理档位需手动探测。** 上游未提供档位元数据，只能靠实际请求试出来；探测会消耗积分。
+- **国际版与国内版是两套账号体系**，额度互不通用，需分别登录。
+- **模型目录随上游变化**，本地缓存可能滞后。
 
-| 不做 | 理由 |
-|---|---|
-| 独立网关进程 | 回环端点在**进程内**；外部网关要多一个进程、一个端口、一层序列化 |
-| Docker / Redis | 单机自用不需要，会引入常驻依赖 |
-| Responses API（Codex） | DSH 用不到 |
-| Anthropic Messages 协议 | 同上 |
-| 对外 Web 管理面板 | DSH 的设置页就是面板 |
-| 对外暴露 HTTP 端口 | 无此需求；回环端点只绑 `127.0.0.1` |
-| 会话复制 / 账号切换 | 那是 switch 类工具（如 `changexbc/workbuddy-switch`）的领域 |
+---
 
-完整清单与阶段划分见 `docs/PHASES.md`（本地仓库内）。
+## 免责声明
+
+- 本项目**仅供个人学习与研究使用**，仅驱动使用者自己的账号在本机调用，请勿用于商业用途或超出个人合理使用的场景。
+- 使用者需遵守 WorkBuddy / CodeBuddy 的服务条款。因使用本项目产生的任何后果（包括但不限于账号被限制、额度被清空、服务中断），**由使用者自行承担**。
+- 本项目与腾讯、WorkBuddy、CodeBuddy、DeepSeek 均无关联，未获其授权或认可；文中出现的名称仅用于描述兼容关系，商标权利归各自所有。
+- 本项目作者不对因使用或滥用本项目产生的任何直接或间接损失负责。
 
 ---
 
 ## 许可
 
-MIT
+MIT，见 [LICENSE](./LICENSE)。
+
+本插件移植/改写自若干开源项目，逐模块的出处、重合度与各项目许可见 [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md)。

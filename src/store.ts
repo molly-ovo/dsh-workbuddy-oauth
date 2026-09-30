@@ -28,7 +28,6 @@
 
 import {
   credentialPath,
-  deleteCredential,
   displayNameOf,
   isExpired,
   listCredentials,
@@ -273,11 +272,6 @@ export function createCredentialStore(options: CredentialStoreOptions = {}): Cre
       void writeCooldown(uid, untilMs, now()).catch(() => {})
     },
   }
-}
-
-/** Remove one account. Phase 2's multi-account commands build on this. */
-export async function removeAccount(uid: string): Promise<boolean> {
-  return deleteCredential(uid)
 }
 
 /** Persist a freshly signed-in account. */

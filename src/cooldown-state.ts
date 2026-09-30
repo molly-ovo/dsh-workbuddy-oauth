@@ -132,6 +132,32 @@ export async function writeCooldown(uid: string, untilMs: number, now: number = 
 }
 
 /**
+ * Drop one account's persisted cooldown entry.
+ *
+ * Called when an account is removed. Without this the uid outlives the
+ * credential it described: the file keeps naming an account that no longer
+ * exists, which is both a privacy leak (the uid is an account identifier) and a
+ * slow accumulation of dead entries.
+ *
+ * @returns whether an entry was actually removed.
+ */
+export async function clearCooldown(uid: string, now: number = Date.now()): Promise<boolean> {
+  const path = cooldownPath()
+  const dir = stateFilePath('.')
+  const current = await readCooldowns(now)
+  if (!current.delete(uid)) return false
+  const document: CooldownDocument = {
+    version: FORMAT_VERSION,
+    cooldowns: Object.fromEntries([...current].sort(([a], [b]) => a.localeCompare(b))),
+  }
+  await mkdir(dir, { recursive: true })
+  await withFileLock(path, () =>
+    writeFileAtomic(path, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600, dirMode: 0o700 }),
+  )
+  return true
+}
+
+/**
  * Drop every persisted entry.
  *
  * Used so a stale map does not outlive its process: the in-memory map is the

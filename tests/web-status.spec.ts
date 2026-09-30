@@ -83,7 +83,7 @@ describe('workBuddyWebStatus', () => {
       controlKey: 'k',
       credentials: async () => [credential({ nickname: '13800138000' })],
     })
-    expect(document.accounts[0]?.label).toBe('138*****000')
+    expect(document.accounts[0]?.label).toBe('13*******00')
   })
 
   it('marks a region signed in independently of its roster', async () => {

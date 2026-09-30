@@ -17,6 +17,7 @@ import {
   credentialsDir,
   deleteCredential,
   displayNameOf,
+  maskEmailAddresses,
   maskPhoneNumbers,
   isExpired,
   listCredentials,
@@ -167,17 +168,24 @@ describe('phone masking', () => {
     // The whole reason this exists: the nickname is printed by every command,
     // the settings card and the status document, so an account named with a
     // mobile number would be published verbatim.
-    expect(maskPhoneNumbers('13800138000')).toBe('138*****000')
+    expect(maskPhoneNumbers('13800138000')).toBe('13*******00')
+  })
+
+  it('leaves only two digits on each side, hiding seven of eleven', () => {
+    // Three-and-three left the carrier prefix and only five hidden digits; the
+    // fourth digit belongs to the subscriber's own segment.
+    expect(maskPhoneNumbers('13800138000')).toHaveLength(11)
+    expect(maskPhoneNumbers('13800138000').replace(/\*/g, '')).toBe('1300')
   })
 
   it('masks a number embedded in a longer name', () => {
-    expect(maskPhoneNumbers('张三 13800138000')).toBe('张三 138*****000')
-    expect(maskPhoneNumbers('13800138000(工作)')).toBe('138*****000(工作)')
+    expect(maskPhoneNumbers('张三 13800138000')).toBe('张三 13*******00')
+    expect(maskPhoneNumbers('13800138000(工作)')).toBe('13*******00(工作)')
   })
 
   it('keeps a typed country-code prefix, masking only the number', () => {
-    expect(maskPhoneNumbers('+8613800138000')).toBe('+86138*****000')
-    expect(maskPhoneNumbers('86-13800138000')).toBe('86-138*****000')
+    expect(maskPhoneNumbers('+8613800138000')).toBe('+8613*******00')
+    expect(maskPhoneNumbers('86-13800138000')).toBe('86-13*******00')
   })
 
   it('leaves names without a mobile number alone', () => {
@@ -194,11 +202,52 @@ describe('phone masking', () => {
   })
 
   it('masks every number when a name carries more than one', () => {
-    expect(maskPhoneNumbers('13800138000 / 13900139000')).toBe('138*****000 / 139*****000')
+    expect(maskPhoneNumbers('13800138000 / 13900139000')).toBe('13*******00 / 13*******00')
   })
 
   it('applies through displayNameOf, so every surface is covered', () => {
-    expect(displayNameOf(sample({ nickname: '13800138000' }))).toBe('138*****000')
+    expect(displayNameOf(sample({ nickname: '13800138000' }))).toBe('13*******00')
+  })
+})
+
+describe('email masking', () => {
+  it('redacts the local part of an address used as a nickname', () => {
+    // Accounts are often named after the address they signed up with, and the
+    // local part is the identifying half — the domain names only a provider.
+    expect(maskEmailAddresses('alice@example.com')).toBe('a****@example.com')
+  })
+
+  it('masks an address embedded in a longer name', () => {
+    expect(maskEmailAddresses('张三 <zhangsan@example.com>')).toBe('张三 <z*******@example.com>')
+  })
+
+  it('keeps a single-character local part readable without padding it', () => {
+    // The floor of three stars keeps `a@x.com` from rendering as `a@x.com`,
+    // which would look unmasked.
+    expect(maskEmailAddresses('a@example.com')).toBe('a***@example.com')
+  })
+
+  it('leaves a bare user@host alone', () => {
+    // Without a dot in the domain this is an internal id, not an address;
+    // masking it would corrupt a display name while protecting nothing.
+    for (const name of ['user@localhost', 'user@host', '@example.com', 'user@']) {
+      expect(maskEmailAddresses(name)).toBe(name)
+    }
+  })
+
+  it('masks every address when a name carries more than one', () => {
+    expect(maskEmailAddresses('a@x.com / b@y.org')).toBe('a***@x.com / b***@y.org')
+  })
+
+  it('does not start a match mid-token', () => {
+    expect(maskEmailAddresses('xxb@y.com')).toBe('x***@y.com')
+  })
+
+  it('applies through displayNameOf alongside phone masking', () => {
+    expect(displayNameOf(sample({ nickname: 'alice@example.com' }))).toBe('a****@example.com')
+    // Both identifier types are redacted by the one entry point.
+    expect(displayNameOf(sample({ nickname: '张三 13800138000 z@example.com' })))
+      .toBe('张三 13*******00 z***@example.com')
   })
 })
 

@@ -36,7 +36,6 @@ import {
   credentialFromLogin,
   displayNameOf,
   listCredentials,
-  deleteCredential,
   type WorkBuddyCredential,
 } from './credentials.ts'
 import { disabledUids, setAccountDisabled } from './account-state.ts'
@@ -144,6 +143,15 @@ export interface CommandDeps {
    * and the catalogs), while *driving* the OAuth exchange is this module's.
    */
   complete: (state: string) => Promise<{ uid: string; label: string }>
+  /**
+   * Remove an account and every trace of it this plugin keeps.
+   *
+   * Injected rather than called directly so this module does not have to know
+   * which stores are uid-keyed; `account-purge.ts` owns that list. The probe
+   * stores in particular live with the region runtimes, which this layer never
+   * sees.
+   */
+  remove: (uid: string) => Promise<void>
   /** Ask the user something, or `undefined` when no UI service is available. */
   userQuestions: UserQuestionsService | undefined
   /** Plugin logging surface. */
@@ -373,7 +381,7 @@ export function registerCommands(
         }
 
         const label = displayNameOf(target)
-        await deleteCredential(target.uid)
+        await deps.remove(target.uid)
         const remaining = await listCredentials()
         return {
           kind: 'success',

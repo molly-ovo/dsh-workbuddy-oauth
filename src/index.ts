@@ -39,8 +39,9 @@ import { FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, WorkBuddyCatal
 import { createWorkBuddyShim } from './shim.ts'
 import { createCredentialStore } from './store.ts'
 import { WorkBuddyUpstreamClient } from './upstream.ts'
-import { credentialFromLogin, deleteCredential, displayNameOf, listCredentials, probePathFor, type WorkBuddyCredential } from './credentials.ts'
+import { credentialFromLogin, displayNameOf, listCredentials, probePathFor, type WorkBuddyCredential } from './credentials.ts'
 import { setAccountDisabled } from './account-state.ts'
+import { purgeAccount } from './account-purge.ts'
 import { readHiddenModels, setRegionHiddenModels } from './hidden-models.ts'
 import { readUseMaximumContextWindow, writeUseMaximumContextWindow } from './preferences.ts'
 import { LoginClient, LoginPendingError } from './oauth.ts'
@@ -549,6 +550,31 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
+   * Remove an account and every trace of it, then refresh the catalogs.
+   *
+   * **One implementation, two surfaces.** Both `/wb-logout` and the settings
+   * card's sign-out reach this, so neither can leave behind state the other
+   * erases. The credential file is the secret and goes first (see
+   * `account-purge.ts`); the uid-keyed stores follow.
+   *
+   * `enterpriseId` is needed to build the probe key but is not known to the
+   * caller once the credential file is gone, so it is read here first.
+   */
+  const removeAccountCompletely = async (uid: string): Promise<void> => {
+    const target = (await listCredentials()).find(credential => credential.uid === uid)
+    const accountKey = accountIdentityOf(target)
+    await purgeAccount(uid, {
+      ...accountKey === undefined ? {} : { accountKey },
+      // Every region's store is offered the key: the account's own region is not
+      // known here, and a store that held nothing simply reports zero.
+      forgetProbeRecords: (key) =>
+        runtimes.reduce((count, runtime) => count + (runtime.probeStore.forget(key) ? 1 : 0), 0),
+    })
+    await Promise.all(runtimes.map((runtime) => refreshCatalog(ctx, runtime, log, 'login')))
+    ctx.emit('llm/adapters-updated')
+  }
+
+  /**
    * Register the sign-in commands.
    *
    * `userQuestions` is read through `ctx.get` rather than declared as a
@@ -558,6 +584,7 @@ export function apply(ctx: Context, config: Config): void {
    */
   const commandDisposers = registerCommands(ctx, logins, {
     complete: completeLogin,
+    remove: removeAccountCompletely,
     userQuestions: ctx.get('userQuestions') as UserQuestionsService | undefined,
     warn: (message, error) => {
       ctx.logger.warn(`dsh-workbuddy-standalone: ${message}`, error)
@@ -653,18 +680,18 @@ export function apply(ctx: Context, config: Config): void {
         /**
          * The card's counterpart to `/wb-logout`.
          *
-         * Deletes our own stored credential only — the upstream account is
-         * untouched — and refreshes the catalog so a group that is now empty
-         * disappears instead of offering models that can only fail.
+         * Erases every trace of the account — the credential file, its persisted
+         * cooldown, its enable/disable state, and its probe records — via the
+         * same path the command uses, so the two surfaces cannot drift. The
+         * upstream account is untouched. The catalog is refreshed so a group that
+         * is now empty disappears instead of offering models that can only fail.
          */
         logout: async (uid) => {
           const credentials = await listCredentials()
           const target = credentials.find(credential => credential.uid === uid)
           if (target === undefined) return { state: 'failed', reason: 'no such account' }
           const label = displayNameOf(target)
-          await deleteCredential(uid)
-          await Promise.all(runtimes.map((runtime) => refreshCatalog(ctx, runtime, log, 'login')))
-          ctx.emit('llm/adapters-updated')
+          await removeAccountCompletely(uid)
           return { state: 'ok', reason: label }
         },
         /**

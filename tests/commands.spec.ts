@@ -19,6 +19,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import { registerCommands, renderAccounts, type UserQuestionsService } from '../src/commands.ts'
 import { writeCredential, type WorkBuddyCredential } from '../src/credentials.ts'
+import { purgeAccount } from '../src/account-purge.ts'
 import { LoginClient, LoginExpiredError, LoginPendingError } from '../src/oauth.ts'
 import type { WorkBuddyRegion } from '../src/region.ts'
 
@@ -106,6 +107,9 @@ function credential(uid: string, overrides: Partial<WorkBuddyCredential> = {}): 
 function deps(overrides: Record<string, unknown> = {}) {
   return {
     complete: vi.fn(async () => ({ uid: 'uid-1', label: '号一' })),
+    // The real purge, not a stub: `/wb-logout` is only correct if the credential
+    // actually disappears, and these tests assert on the state after it runs.
+    remove: (uid: string) => purgeAccount(uid),
     userQuestions: undefined as UserQuestionsService | undefined,
     warn: vi.fn(),
     ...overrides,

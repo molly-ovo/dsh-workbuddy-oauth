@@ -254,6 +254,25 @@ export class WorkBuddyProbeStore {
     this.persist()
   }
 
+  /**
+   * Drop one account's records.
+   *
+   * Called when an account is removed. A record is keyed by `uid:enterpriseId`
+   * and carries that identity inside itself, so leaving it behind would keep a
+   * removed account's identifier on disk — and if the same account signed in
+   * again, a stale observation could answer for it.
+   *
+   * @param account - the account key, as `uid:enterpriseId`.
+   * @returns whether any record was removed.
+   */
+  forget(account: string): boolean {
+    const records = this.load()
+    if (records[account] === undefined) return false
+    delete records[account]
+    this.persist()
+    return true
+  }
+
   /** Every record currently held, grouped by account, for status display. */
   all(): Readonly<Record<string, Readonly<Record<string, WorkBuddyProbeRecord>>>> {
     const records = this.load()

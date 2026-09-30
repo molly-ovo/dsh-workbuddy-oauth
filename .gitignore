@@ -28,3 +28,37 @@ docs/
 
 # 上游参照 clone —— 只读参考，不随仓库分发
 .upstream/
+
+# ---------------------------------------------------------------------------
+# 运行期状态（含令牌与账号标识）—— 防御性忽略
+#
+# 这些文件正常只存在于 $DSH_HOME/workbuddy-standalone/，不在仓库内。此处仍
+# 逐一列出，是因为一次手滑的复制（调试、备份、截图）就足以把一份含
+# accessToken / refreshToken / 账号 uid 的文件送进提交。宁可多写几行。
+#
+# 判据：凡 src/credentials.ts 的 stateFilePath() 能写出的名字，都在这里。
+# ---------------------------------------------------------------------------
+accounts/
+workbuddy-*.json
+probe-*.json
+cooldowns.json
+disabled-accounts.json
+hidden-models.json
+task-state.json
+preferences.json
+compatibility.json
+
+# 凭据 / 环境 / 密钥
+.env
+.env.*
+*.pem
+*.key
+*.p12
+.npmrc
+.netrc
+settings.yaml
+settings.yml
+
+# DSH 本地 profile 数据（可能含已安装插件的清单与凭据）
+.workbuddy-probe.json
+.dsh/

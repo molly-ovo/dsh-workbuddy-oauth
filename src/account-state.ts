@@ -79,6 +79,22 @@ export async function disabledUids(): Promise<ReadonlySet<string>> {
 }
 
 /**
+ * Forget one account's enable/disable state.
+ *
+ * Called when an account is removed. A disabled uid that outlives its
+ * credential is a stale identifier left on disk for no purpose, and if the same
+ * uid is ever re-added it would silently come back disabled.
+ *
+ * @returns whether the uid was present and therefore removed.
+ */
+export async function forgetAccount(uid: string): Promise<boolean> {
+  const current = await readDisabled()
+  if (!current.delete(uid)) return false
+  await writeDisabled(current)
+  return true
+}
+
+/**
  * Enable or disable one account.
  *
  * Idempotent: disabling an already-disabled account and enabling an already-
