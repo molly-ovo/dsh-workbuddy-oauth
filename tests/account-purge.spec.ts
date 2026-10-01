@@ -7,7 +7,7 @@
  * assert on every uid-keyed file rather than on the credential alone.
  */
 
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -15,6 +15,7 @@ import { purgeAccount } from '../src/account-purge.ts'
 import { disabledUids, forgetAccount, setAccountDisabled } from '../src/account-state.ts'
 import { clearCooldown, readCooldowns, writeCooldown } from '../src/cooldown-state.ts'
 import { credentialPath, listCredentials, writeCredential, type WorkBuddyCredential } from '../src/credentials.ts'
+import { LEGACY_TASK_STATE_FILENAME } from '../src/legacy-task-state.ts'
 
 let home: string
 const savedHome = process.env['DSH_HOME']
@@ -55,6 +56,7 @@ describe('purgeAccount', () => {
       cooldownCleared: true,
       enableStateForgotten: true,
       probeStoresPurged: 0,
+      legacyTaskStateRemoved: false,
     })
     await expect(listCredentials()).resolves.toEqual([])
     expect((await readCooldowns()).has('uid-a')).toBe(false)
@@ -133,6 +135,32 @@ describe('purgeAccount', () => {
     await writeCredential(sample('uid-a'))
     await purgeAccount('uid-a')
     await expect(readFile(credentialPath('uid-a'), 'utf8')).rejects.toThrow()
+  })
+
+  it('deletes the state file left by the removed task-automation feature', async () => {
+    // That file is keyed by uid and has no writer any more, so without this it
+    // outlives every account it names — the leak this suite is about, on a file
+    // no current source file mentions.
+    const legacy = join(home, 'workbuddy-standalone', LEGACY_TASK_STATE_FILENAME)
+    await mkdir(join(home, 'workbuddy-standalone'), { recursive: true })
+    await writeFile(legacy, JSON.stringify({
+      version: 1,
+      accounts: { 'uid-a': { lastSuccessDate: '2026-09-30' } },
+    }), 'utf8')
+    await writeCredential(sample('uid-a'))
+
+    const result = await purgeAccount('uid-a')
+
+    expect(result.legacyTaskStateRemoved).toBe(true)
+    await expect(readFile(legacy, 'utf8')).rejects.toThrow()
+  })
+
+  it('reports a missing legacy file rather than failing', async () => {
+    // Every install that never ran the removed feature has no such file, and a
+    // sign-out there must be a no-op, not an error.
+    await writeCredential(sample('uid-a'))
+    const result = await purgeAccount('uid-a')
+    expect(result.legacyTaskStateRemoved).toBe(false)
   })
 })
 

@@ -12,12 +12,17 @@
  * set. A new uid-keyed store must be added here, which is the point: the list is
  * in one place rather than repeated at each call site.
  *
+ * It also removes `task-state.json`, left by a feature this plugin no longer
+ * ships. That file is uid-keyed and has no writer, so it would otherwise
+ * outlive every account it names; see ./legacy-task-state.ts.
+ *
  * @module dsh-workbuddy-standalone/account-purge
  */
 
 import { deleteCredential } from './credentials.ts'
 import { clearCooldown } from './cooldown-state.ts'
 import { forgetAccount } from './account-state.ts'
+import { removeLegacyTaskState } from './legacy-task-state.ts'
 
 /** What one account removal actually erased, for reporting and tests. */
 export interface AccountPurgeResult {
@@ -29,6 +34,8 @@ export interface AccountPurgeResult {
   enableStateForgotten: boolean
   /** How many probe stores dropped records for this account. */
   probeStoresPurged: number
+  /** Whether a state file left by the removed task-automation feature was deleted. */
+  legacyTaskStateRemoved: boolean
 }
 
 /** Hooks the caller supplies for state it owns. */
@@ -70,6 +77,9 @@ export async function purgeAccount(
   const credentialRemoved = await deleteCredential(uid)
   const cooldownCleared = await clearCooldown(uid)
   const enableStateForgotten = await forgetAccount(uid)
+  // Whole-file, not per-uid: the writer no longer exists, so anything left in it
+  // is stale. See ./legacy-task-state.ts.
+  const legacyTaskStateRemoved = await removeLegacyTaskState()
 
   let probeStoresPurged = 0
   const { forgetProbeRecords, accountKey } = options
@@ -77,5 +87,11 @@ export async function purgeAccount(
     probeStoresPurged = forgetProbeRecords(accountKey)
   }
 
-  return { credentialRemoved, cooldownCleared, enableStateForgotten, probeStoresPurged }
+  return {
+    credentialRemoved,
+    cooldownCleared,
+    enableStateForgotten,
+    probeStoresPurged,
+    legacyTaskStateRemoved,
+  }
 }
