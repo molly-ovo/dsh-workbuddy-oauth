@@ -26,6 +26,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { WorkBuddyConfigPage } from './WorkBuddyConfigPage.tsx'
 import { WorkBuddyProbeControl } from './WorkBuddyProbeControl.tsx'
+import { installStyles } from './styles.ts'
 import { en, zh, type WorkBuddyLocaleKey } from './locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -71,6 +72,12 @@ function guardClientContribution<T>(label: string, fn: () => T): T | undefined {
 /** Register the bundle's browser-side contributions. */
 export function apply(ctx: ClientContext): void {
   const namespace = 'workbuddy'
+  // Install the card's stylesheet once per document, before anything renders:
+  // the interaction states the card depends on (`:hover`, `:active`,
+  // `:focus-visible`, `:disabled`) cannot be expressed by inline styles. Its own
+  // failure is not fatal — an unstyled card still works, so this is guarded like
+  // every other contribution.
+  guardClientContribution('stylesheet', () => { installStyles() })
   guardClientContribution('settings copy', () => {
     ctx.effect(() => ctx.locale.register(namespace, { zh, en }), 'dsh-workbuddy-standalone: settings copy')
   })

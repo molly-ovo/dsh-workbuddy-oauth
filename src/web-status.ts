@@ -116,6 +116,10 @@ function modelViews(models: readonly WorkBuddyModelInfo[]): readonly WorkBuddyWe
     name: model.name,
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
+    // More than one declared window means the maximum-window switch has
+    // something to change on this row. `contextWindow` is already the resolved
+    // value for the current flag, so the card needs no second figure.
+    multiWindow: (model.supportedContextWindows?.length ?? 0) > 1,
   }))
 }
 

@@ -204,20 +204,35 @@ describe('phone masking', () => {
 })
 
 describe('email masking', () => {
-  it('redacts the local part of an address used as a nickname', () => {
-    // Accounts are often named after the address they signed up with, and the
-    // local part is the identifying half — the domain names only a provider.
-    expect(maskEmailAddresses('alice@example.com')).toBe('a****@example.com')
+  it('keeps two characters on each side, one star between, and drops the TLD', () => {
+    // Accounts are often named after the address they signed up with. The label
+    // is the account name in every list, so the mask is bounded rather than
+    // proportional: the hidden middle is ONE star whatever its length.
+    expect(maskEmailAddresses('alice1990@example.com')).toBe('al*90@example')
+  })
+
+  it('keeps the label short enough not to widen an account list', () => {
+    // The reason the old form was replaced: keeping the whole domain and a star
+    // per hidden character made the label twenty characters for a typical
+    // gmail address, and it stretched every column it appeared in.
+    const masked = maskEmailAddresses('alice1990@example.com')
+    expect(masked.length).toBeLessThan(14)
+    expect(masked).not.toContain('.com')
+  })
+
+  it('drops only the last domain label, keeping a multi-label domain', () => {
+    expect(maskEmailAddresses('zhangsan@example.com.cn')).toBe('zh*an@example.com')
   })
 
   it('masks an address embedded in a longer name', () => {
-    expect(maskEmailAddresses('张三 <zhangsan@example.com>')).toBe('张三 <z*******@example.com>')
+    expect(maskEmailAddresses('张三 <zhangsan@example.com>')).toBe('张三 <zh*an@example>')
   })
 
-  it('keeps a single-character local part readable without padding it', () => {
-    // The floor of three stars keeps `a@x.com` from rendering as `a@x.com`,
-    // which would look unmasked.
-    expect(maskEmailAddresses('a@example.com')).toBe('a***@example.com')
+  it('hides at least one character even for a very short local part', () => {
+    // A single visible character with no star would look unmasked.
+    expect(maskEmailAddresses('a@example.com')).toBe('*@example')
+    expect(maskEmailAddresses('ab@example.com')).toBe('a*@example')
+    expect(maskEmailAddresses('abc@example.com')).toBe('a*c@example')
   })
 
   it('leaves a bare user@host alone', () => {
@@ -229,7 +244,7 @@ describe('email masking', () => {
   })
 
   it('masks every address when a name carries more than one', () => {
-    expect(maskEmailAddresses('a@x.com / b@y.org')).toBe('a***@x.com / b***@y.org')
+    expect(maskEmailAddresses('a@x.com / b@y.org')).toBe('*@x / *@y')
   })
 
   it('does not treat a second @ as the start of another address', () => {
@@ -237,14 +252,17 @@ describe('email masking', () => {
     // is preceded by characters the local-part class accepts, so without the
     // guard the tail `@y.com` matches with `..` as its local part and gets
     // masked as if it were an address of its own.
-    expect(maskEmailAddresses('user@x.com..@y.com')).toBe('u***@x.com..@y.com')
+    // `user` is four characters — below `2 * EMAIL_VISIBLE_CHARS + 1` — so it
+    // takes the short branch, and the untouched tail proves the guard held.
+    expect(maskEmailAddresses('user@x.com..@y.com')).toBe('u*r@x..@y.com')
   })
 
   it('applies through displayNameOf alongside phone masking', () => {
-    expect(displayNameOf(sample({ nickname: 'alice@example.com' }))).toBe('a****@example.com')
-    // Both identifier types are redacted by the one entry point.
+    expect(displayNameOf(sample({ nickname: 'alice@example.com' }))).toBe('al*ce@example')
+    // Both identifier types are redacted by the one entry point. A one-character
+    // local part hides completely, so `z@example.com` cannot keep a readable `z`.
     expect(displayNameOf(sample({ nickname: '张三 13800138000 z@example.com' })))
-      .toBe('张三 13*******00 z***@example.com')
+      .toBe('张三 13*******00 *@example')
   })
 })
 

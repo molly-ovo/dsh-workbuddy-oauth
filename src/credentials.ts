@@ -307,30 +307,61 @@ export function maskPhoneNumbers(text: string): string {
  */
 const EMAIL_PATTERN = /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)/gu
 
-/** How many leading characters of an address's local part stay readable. */
-const EMAIL_VISIBLE_CHARS = 1
+/** Leading/trailing characters of the local part kept when there is room. */
+const EMAIL_VISIBLE_CHARS = 2
+
+/**
+ * Reduce a local part to a fixed, short form with the middle hidden.
+ *
+ * **Short by design.** The masked name is the account label in every list, so a
+ * faithful-looking mask is also a wide one: `2*********@gmail.com` is twenty
+ * characters and stretches the whole table it appears in. The middle collapses
+ * to a *single* star regardless of how much it hides, which is what keeps the
+ * label's width bounded rather than proportional to the address.
+ *
+ * At least one character is always hidden, including for short local parts —
+ * `ab` masks to `a*`, not to a form that reveals both characters.
+ */
+function maskLocalPart(local: string): string {
+  if (local.length <= 1) return '*'
+  if (local.length >= EMAIL_VISIBLE_CHARS * 2 + 1) {
+    return `${local.slice(0, EMAIL_VISIBLE_CHARS)}*${local.slice(-EMAIL_VISIBLE_CHARS)}`
+  }
+  // Too short for two on each side without revealing everything: keep the head
+  // and, when there is one, the tail.
+  return local.length >= 3 ? `${local.slice(0, 1)}*${local.slice(-1)}` : `${local.slice(0, 1)}*`
+}
+
+/**
+ * Drop the domain's last label (its TLD).
+ *
+ * `gmail.com` names a provider, but `.com` names nothing; keeping only the
+ * registrable part shortens every address by a constant amount. A multi-label
+ * domain keeps all but its final label, so `example.com.cn` becomes
+ * `example.com`.
+ */
+function shortenDomain(domain: string): string {
+  return domain.replace(/\.[A-Za-z0-9-]+$/, '')
+}
 
 /**
  * Mask the local part of any email address inside a display name.
  *
  * Accounts are frequently named after the address they signed up with, and the
- * local part is the identifying half — `alice@example.com` names a person,
- * while `example.com` names only a provider. So the local part is reduced to its
- * first character and the domain is kept, which is the convention users already
- * read (`a***@example.com`) and leaves the account recognizable in a list.
+ * local part is the identifying half — `alice1990` names a person, while
+ * `example` names only a provider. So the local part keeps its first and last
+ * {@link EMAIL_VISIBLE_CHARS} characters with one star between them, and the TLD
+ * is dropped: `alice1990@example.com` renders as `al*90@example`.
  *
  * Like {@link maskPhoneNumbers}, this is a *display* transform only: the stored
  * nickname keeps the real value.
  *
  * @param text - the raw display name.
- * @returns the name with every address's local part masked.
+ * @returns the name with every address shortened to `ab*cd@provider`.
  */
 export function maskEmailAddresses(text: string): string {
-  return text.replace(EMAIL_PATTERN, (whole: string, local: string, domain: string) => {
-    const visible = local.slice(0, EMAIL_VISIBLE_CHARS)
-    const stars = '*'.repeat(Math.max(3, local.length - EMAIL_VISIBLE_CHARS))
-    return `${visible}${stars}@${domain}`
-  })
+  return text.replace(EMAIL_PATTERN, (whole: string, local: string, domain: string) =>
+    `${maskLocalPart(local)}@${shortenDomain(domain)}`)
 }
 
 /**

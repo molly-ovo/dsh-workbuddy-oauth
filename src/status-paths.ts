@@ -81,6 +81,15 @@ export interface WorkBuddyWebModel {
   contextWindow: number
   /** Declared max output tokens. */
   maxTokens: number
+  /**
+   * Whether this model declares more than one context window.
+   *
+   * The card needs it to show which rows the maximum-window switch actually
+   * changes, and to decide whether to offer that switch at all: a region whose
+   * models all declare a single window cannot be affected by the flag, so the
+   * control would appear to do nothing there.
+   */
+  multiWindow: boolean
 }
 
 /** One model's recorded probe observation. */
