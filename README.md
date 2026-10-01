@@ -15,21 +15,29 @@
 
 前置：`pnpm` 在 `PATH` 上、Node.js `^22.19.0 || >=24.0.0`，以及一个 WorkBuddy / CodeBuddy 账号（国内版或国际版均可）。**不需要安装桌面 App**——登录由本插件自己走 OAuth 设备码流程完成。本插件在 **`0.2.0-rc.1`** 上开发与测试。
 
+### 从 GitHub 安装（推荐）
+
 ```sh
-dsh plugin --profile web add dsh-workbuddy-oauth
+dsh plugin --profile web add github:molly-ovo/dsh-workbuddy-oauth
 dsh web
 ```
+
+**本仓库包含构建好的 `lib/`**，所以这一步不需要 `pnpm install`、也不需要构建，装完即可用。
+
+### 从本地源码安装
+
+```sh
+git clone https://github.com/molly-ovo/dsh-workbuddy-oauth.git
+dsh plugin --profile web add ./dsh-workbuddy-oauth
+```
+
+### 两种方式的共同点
 
 `dsh plugin` 会把参数转发给 pnpm 在 profile 目录里执行，成功后**自动对账 `dsh.profile.bundles`**——本插件声明了 `dsh.bundle.patch`，装上即接管模型目录，无需手改 profile 文件。`web` profile 首次使用时自动从模板初始化。
 
 **装完刷新浏览器**。模型 provider 目录在进程启动时组成；若模型没出现，重启 `dsh web`。
 
-也可以从源码装（本仓库**包含构建好的 `lib/`**，clone 下来不必构建）：
-
-```sh
-git clone <本仓库地址>
-dsh plugin --profile web add ./dsh-workbuddy-oauth
-```
+> **升级**：重新执行一次安装命令即可。GitHub 形式的依赖在 lockfile 中锁定 commit SHA，**不会自动跟随新提交**，需要重新 `add` 来重新解析。
 
 **确认已生效**——运行 `/wb-status` 应有输出。若没有：确认该 profile 的插件行 `enabled`、`llm-workbuddy-oauth` 已注册，并检查「插件」页是否能看到本条目。
 
