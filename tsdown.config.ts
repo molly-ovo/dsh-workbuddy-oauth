@@ -1,16 +1,16 @@
 import { readFileSync } from 'node:fs'
 import type { UserConfig } from 'tsdown'
 
-const PLUGIN_ID = 'dsh-workbuddy-standalone'
+const PLUGIN_ID = 'dsh-workbuddy-oauth'
 
 /** Read the npm version once so the build injects it into src/version.ts. */
 const PACKAGE_VERSION = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
 ).version as string
 
-/** Build-time define map; `src/version.ts` reads `__DSH_WORKBUDDY_STANDALONE_VERSION__`. */
+/** Build-time define map; `src/version.ts` reads `__DSH_WORKBUDDY_OAUTH_VERSION__`. */
 const VERSION_DEFINE = {
-  __DSH_WORKBUDDY_STANDALONE_VERSION__: JSON.stringify(PACKAGE_VERSION),
+  __DSH_WORKBUDDY_OAUTH_VERSION__: JSON.stringify(PACKAGE_VERSION),
 }
 
 /**

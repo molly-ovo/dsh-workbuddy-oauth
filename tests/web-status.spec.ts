@@ -18,7 +18,7 @@ import type { WorkBuddyCredential } from '../src/credentials.ts'
 function regionView(region: 'cn' | 'global', models: readonly { id: string; name: string }[] = []): WorkBuddyRegionView {
   return {
     region,
-    providerId: region === 'global' ? 'workbuddy-standalone-ai' : 'workbuddy-standalone',
+    providerId: region === 'global' ? 'workbuddy-oauth-ai' : 'workbuddy-oauth',
     models: () => models as never,
     probeRunning: () => false,
     probeCandidates: () => [],
@@ -114,9 +114,9 @@ describe('workBuddyWebStatus', () => {
       credentials: async () => [],
     })
     const byRegion = new Map(document.regions.map(region => [region.region, region]))
-    expect(byRegion.get('cn')?.providerId).toBe('workbuddy-standalone')
+    expect(byRegion.get('cn')?.providerId).toBe('workbuddy-oauth')
     expect(byRegion.get('cn')?.controlPath).toBe(WORKBUDDY_CONTROL_PATH)
-    expect(byRegion.get('global')?.providerId).toBe('workbuddy-standalone-ai')
+    expect(byRegion.get('global')?.providerId).toBe('workbuddy-oauth-ai')
     expect(byRegion.get('global')?.controlPath).toBe(WORKBUDDY_AI_CONTROL_PATH)
   })
 

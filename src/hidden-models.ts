@@ -10,7 +10,7 @@
  *
  * Persisted so a restart does not resurrect a model the user deliberately hid.
  *
- * @module dsh-workbuddy-standalone/hidden-models
+ * @module dsh-workbuddy-oauth/hidden-models
  */
 
 import { readFile, mkdir } from 'node:fs/promises'

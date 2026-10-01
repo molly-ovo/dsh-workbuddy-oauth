@@ -1,7 +1,7 @@
 /**
  * Copy for the WorkBuddy settings card and the reasoning-level control.
  *
- * @module dsh-workbuddy-standalone/client/locales
+ * @module dsh-workbuddy-oauth/client/locales
  */
 
 /** Dictionary keys this namespace owns. */

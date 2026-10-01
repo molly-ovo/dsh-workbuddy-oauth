@@ -73,7 +73,7 @@ describe('purgeAccount', () => {
     await purgeAccount('uid-a')
 
     for (const name of ['cooldowns.json', 'disabled-accounts.json']) {
-      const text = await readFile(join(home, 'workbuddy-standalone', name), 'utf8')
+      const text = await readFile(join(home, 'workbuddy-oauth', name), 'utf8')
       expect(text).not.toContain('uid-a')
     }
   })
@@ -141,8 +141,8 @@ describe('purgeAccount', () => {
     // That file is keyed by uid and has no writer any more, so without this it
     // outlives every account it names — the leak this suite is about, on a file
     // no current source file mentions.
-    const legacy = join(home, 'workbuddy-standalone', LEGACY_TASK_STATE_FILENAME)
-    await mkdir(join(home, 'workbuddy-standalone'), { recursive: true })
+    const legacy = join(home, 'workbuddy-oauth', LEGACY_TASK_STATE_FILENAME)
+    await mkdir(join(home, 'workbuddy-oauth'), { recursive: true })
     await writeFile(legacy, JSON.stringify({
       version: 1,
       accounts: { 'uid-a': { lastSuccessDate: '2026-09-30' } },

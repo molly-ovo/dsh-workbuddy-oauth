@@ -18,7 +18,7 @@ const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), '.dsh')
 
 /** Read the stored credential, tolerating the on-disk shape. */
 async function loadCredential() {
-  const dir = join(DSH_HOME, 'workbuddy-standalone', 'accounts')
+  const dir = join(DSH_HOME, 'workbuddy-oauth', 'accounts')
   const { readdir } = await import('node:fs/promises')
   const names = await readdir(dir)
   const file = names.find((name) => name.startsWith('workbuddy-') && name.endsWith('.json'))

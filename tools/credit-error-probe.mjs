@@ -16,7 +16,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), '.dsh')
-const ACCOUNTS = join(DSH_HOME, 'workbuddy-standalone', 'accounts')
+const ACCOUNTS = join(DSH_HOME, 'workbuddy-oauth', 'accounts')
 const PREFIXES = process.argv.slice(2)
 
 /** Derive a device id the way src/fingerprint.ts does. */

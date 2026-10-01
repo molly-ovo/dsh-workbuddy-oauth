@@ -10,7 +10,7 @@
  * the CN API host and the CN web origin are deliberately *different* domains,
  * and the login endpoints check `Origin`.
  *
- * @module dsh-workbuddy-standalone/region
+ * @module dsh-workbuddy-oauth/region
  */
 
 /** Which WorkBuddy deployment a credential belongs to. */

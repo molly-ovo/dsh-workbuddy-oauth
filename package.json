@@ -1,6 +1,6 @@
 {
-  "name": "dsh-workbuddy-standalone",
-  "displayName": "DSH WorkBuddy Standalone",
+  "name": "dsh-workbuddy-oauth",
+  "displayName": "DSH WorkBuddy OAuth",
   "description": "把 WorkBuddy 模型接入 DeepSeek Harness —— 不依赖桌面 App，走 OAuth 设备码登录。",
   "version": "0.0.1",
   "private": true,

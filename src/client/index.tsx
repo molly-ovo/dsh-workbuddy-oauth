@@ -10,7 +10,7 @@
  * longer exists on the running host, and registering a seam the host never
  * declares is exactly what makes it silently never run.
  *
- * @module dsh-workbuddy-standalone/client
+ * @module dsh-workbuddy-oauth/client
  */
 
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
@@ -37,16 +37,16 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 /** Stable browser-plugin name. */
-export const name = 'dsh-workbuddy-standalone-client'
+export const name = 'dsh-workbuddy-oauth-client'
 
 /** The bundle's package name, which is also this half's configuration key. */
-export const BUNDLE_NAME = 'dsh-workbuddy-standalone'
+export const BUNDLE_NAME = 'dsh-workbuddy-oauth'
 
 /** Required client services. */
 export const inject = ['slots', 'locale', 'remote', 'remote.session']
 
 /** Prefix every guarded client contribution's degradation logs with this. */
-const CLIENT_CONTRIBUTION_FAILED = '[dsh-workbuddy-standalone] client contribution failed to load (host provider unaffected):'
+const CLIENT_CONTRIBUTION_FAILED = '[dsh-workbuddy-oauth] client contribution failed to load (host provider unaffected):'
 
 /** Disposer handed back when a deferred registration degraded: nothing to undo. */
 const NOOP_DISPOSER = (): void => {}
@@ -79,7 +79,7 @@ export function apply(ctx: ClientContext): void {
   // every other contribution.
   guardClientContribution('stylesheet', () => { installStyles() })
   guardClientContribution('settings copy', () => {
-    ctx.effect(() => ctx.locale.register(namespace, { zh, en }), 'dsh-workbuddy-standalone: settings copy')
+    ctx.effect(() => ctx.locale.register(namespace, { zh, en }), 'dsh-workbuddy-oauth: settings copy')
   })
   const t = ctx.locale.bind(namespace)
 
@@ -111,7 +111,7 @@ export function apply(ctx: ClientContext): void {
             // (`already has an entry with id`). Reusing its id is exactly the
             // provider-id collision (F2), only on the client slot — and it fails
             // silently here because the guard swallows the throw.
-            id: 'workbuddy-standalone-probe',
+            id: 'workbuddy-oauth-probe',
             order: 10,
             inject: sessionId => ({
               directory: scope.modelDirectories.directoryFor(

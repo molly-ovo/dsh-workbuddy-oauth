@@ -8,11 +8,11 @@
  * constraints rather than style: a probe spends the user's credit, so two of
  * them must never overlap and none may run without authorization.
  *
- * Kept separate from {@link module:dsh-workbuddy-standalone/probe} so the
+ * Kept separate from {@link module:dsh-workbuddy-oauth/probe} so the
  * protocol stays a pure function of one model's responses, while queueing,
  * persistence, and policy live here.
  *
- * @module dsh-workbuddy-standalone/probe-service
+ * @module dsh-workbuddy-oauth/probe-service
  */
 
 import type { CredentialStore } from './store.ts'

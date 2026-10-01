@@ -14,7 +14,7 @@
  * Endpoints, headers and the `{code,msg,data}` envelope mirror the flow the
  * official CLI performs. `expiresIn` is in **seconds**.
  *
- * @module dsh-workbuddy-standalone/oauth
+ * @module dsh-workbuddy-oauth/oauth
  */
 
 import { randomUUID } from 'node:crypto'

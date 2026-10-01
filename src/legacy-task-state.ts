@@ -22,7 +22,7 @@
  * removed feature. Keeping the legacy filename and its reasoning here means the
  * day this module is deleted, nothing else has to change.
  *
- * @module dsh-workbuddy-standalone/legacy-task-state
+ * @module dsh-workbuddy-oauth/legacy-task-state
  */
 
 import { rm } from 'node:fs/promises'

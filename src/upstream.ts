@@ -10,7 +10,7 @@
  * configuration ({@link ./identity.ts}) rather than from an installed desktop
  * app.
  *
- * @module dsh-workbuddy-standalone/upstream
+ * @module dsh-workbuddy-oauth/upstream
  */
 
 import {

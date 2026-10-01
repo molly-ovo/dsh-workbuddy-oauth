@@ -10,7 +10,7 @@
  * Persisted so a restart keeps the user's choice (same reason `hidden-models.ts`
  * persists, and the same discipline: atomic write, file lock, versioned shape).
  *
- * @module dsh-workbuddy-standalone/preferences
+ * @module dsh-workbuddy-oauth/preferences
  */
 
 import { readFile, mkdir } from 'node:fs/promises'

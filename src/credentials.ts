@@ -3,7 +3,7 @@
  *
  * Replaces `dsh-workbuddy-connect`'s desktop-credential reader. Credentials
  * come from this plugin's own OAuth flow ({@link ./oauth.ts}) and live in one
- * file per account under `$DSH_HOME/workbuddy-standalone/`, so:
+ * file per account under `$DSH_HOME/workbuddy-oauth/`, so:
  *
  * - no desktop app is required, and none is read;
  * - several accounts can coexist (the file name carries the uid);
@@ -12,7 +12,7 @@
  * `expiresAtMs` is epoch **milliseconds** here. The upstream OAuth call returns
  * `expiresIn` in seconds, so conversion happens once, at this boundary.
  *
- * @module dsh-workbuddy-standalone/credentials
+ * @module dsh-workbuddy-oauth/credentials
  */
 
 import { mkdir, readFile, readdir, rm } from 'node:fs/promises'
@@ -23,7 +23,7 @@ import { regionOfDomain, type WorkBuddyRegion } from './region.ts'
 import type { AccountInfo, LoginResult } from './oauth.ts'
 
 /** Directory under the Harness home that holds this plugin's state. */
-export const STATE_DIR_NAME = 'workbuddy-standalone'
+export const STATE_DIR_NAME = 'workbuddy-oauth'
 
 /** Prefix of each credential file; the remainder is the account uid. */
 export const CREDENTIAL_FILE_PREFIX = 'workbuddy-'

@@ -123,7 +123,7 @@ describe('refresh persists the rotated credential', () => {
 
     await refreshCredential('uid-1', { fetchImpl: fetchImpl as unknown as typeof fetch })
 
-    const after = await readCredential(join(home, 'workbuddy-standalone', 'accounts', 'workbuddy-uid-1.json'))
+    const after = await readCredential(join(home, 'workbuddy-oauth', 'accounts', 'workbuddy-uid-1.json'))
     expect(after?.accessToken).toBe('fresh-access')
     expect(after?.refreshToken).toBe('fresh-refresh')
     // Untouched fields survive, so a refresh never loses account metadata.
@@ -141,7 +141,7 @@ describe('refresh persists the rotated credential', () => {
     await writeCredential(stored({ expiresAtMs: Date.now() - 1 }))
 
     await refreshCredential('uid-1', { fetchImpl: fetchImpl as unknown as typeof fetch })
-    const after = await readCredential(join(home, 'workbuddy-standalone', 'accounts', 'workbuddy-uid-1.json'))
+    const after = await readCredential(join(home, 'workbuddy-oauth', 'accounts', 'workbuddy-uid-1.json'))
     expect(after?.refreshToken).toBe('old-refresh')
   })
 })
@@ -227,7 +227,7 @@ describe('failure paths', () => {
     await writeCredential(stored({ expiresAtMs: Date.now() - 1 }))
 
     await refreshCredential('uid-1', { fetchImpl: fetchImpl as unknown as typeof fetch })
-    const after = await readCredential(join(home, 'workbuddy-standalone', 'accounts', 'workbuddy-uid-1.json'))
+    const after = await readCredential(join(home, 'workbuddy-oauth', 'accounts', 'workbuddy-uid-1.json'))
     expect(after?.accessToken).toBe('old-access')
   })
 })

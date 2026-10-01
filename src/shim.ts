@@ -12,7 +12,7 @@
  * own client satisfies all four by construction; local attackers cannot
  * read the secret out of the plugin process's memory.
  *
- * @module dsh-workbuddy-connect/shim
+ * @module dsh-workbuddy-oauth/shim
  */
 
 import { randomBytes, timingSafeEqual } from 'node:crypto'
@@ -278,7 +278,7 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
     // without publishing a full identifier. The nickname is deliberately not
     // logged: it can be a phone number, which is why `displayNameOf` masks it.
     logger?.info(
-      `dsh-workbuddy-standalone: chat ${result.ok ? 'ok' : result.kind} via uid=${credential.uid.slice(0, 8)}`
+      `dsh-workbuddy-oauth: chat ${result.ok ? 'ok' : result.kind} via uid=${credential.uid.slice(0, 8)}`
       + `${sessionKey === undefined ? ' (no session)' : ''}`,
     )
 
@@ -322,7 +322,7 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
       if (chunk.includes('[DONE]')) sawDone = true
     })
     body.on('error', (error: unknown) => {
-      logger?.warn('dsh-workbuddy-connect: upstream stream failed mid-flight', error)
+      logger?.warn('dsh-workbuddy-oauth: upstream stream failed mid-flight', error)
       if (!sawDone && res.writable) res.end('data: [DONE]\n\n')
     })
     body.pipe(res)

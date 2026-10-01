@@ -23,7 +23,7 @@
  * (affinity) and health-based rotation are Phase 2 concerns; leaving them out
  * here keeps this module honest about what it does.
  *
- * @module dsh-workbuddy-standalone/store
+ * @module dsh-workbuddy-oauth/store
  */
 
 import {

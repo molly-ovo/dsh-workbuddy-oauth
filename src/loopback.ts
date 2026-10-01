@@ -3,7 +3,7 @@
  * shim and the same-origin web-status route. Both are only ever meant to be
  * addressed through the machine's loopback interface.
  *
- * @module dsh-workbuddy-connect/loopback
+ * @module dsh-workbuddy-oauth/loopback
  */
 
 /** Loopback hostnames a local plugin surface may be addressed by. */

@@ -23,7 +23,7 @@
  * into an HTTP header, so whitespace, CR or LF must never pass, and a malformed
  * one throws rather than sending a broken request.
  *
- * @module dsh-workbuddy-standalone/identity
+ * @module dsh-workbuddy-oauth/identity
  */
 
 import type { WorkBuddyRegion } from './region.ts'

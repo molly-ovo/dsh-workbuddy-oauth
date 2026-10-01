@@ -26,7 +26,7 @@
  * The region still travels with each credential, so a domestic and an
  * international account can coexist.
  *
- * @module dsh-workbuddy-standalone
+ * @module dsh-workbuddy-oauth
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -93,7 +93,7 @@ export {
 } from './status-paths.ts'
 
 /** Stable Cordis plugin name. */
-export const name = 'llm-workbuddy-standalone'
+export const name = 'llm-workbuddy-oauth'
 
 /** The model registry required before the provider can register. */
 export const inject = ['llm', 'commands']
@@ -112,10 +112,10 @@ export const inject = ['llm', 'commands']
  * The prefix also keeps the two plugins' model groups distinguishable in the
  * picker, which is what a user comparing them needs.
  */
-export const WORKBUDDY_PROVIDER = 'workbuddy-standalone'
+export const WORKBUDDY_PROVIDER = 'workbuddy-oauth'
 
 /** Provider id for the international region. */
-export const WORKBUDDY_AI_PROVIDER = 'workbuddy-standalone-ai'
+export const WORKBUDDY_AI_PROVIDER = 'workbuddy-oauth-ai'
 
 /**
  * Provider id for one region.
@@ -346,7 +346,7 @@ async function refreshCatalog(
  */
 export function apply(ctx: Context, config: Config): void {
   const log = (message: string): void => {
-    ctx.logger.info(`dsh-workbuddy-standalone: ${message}`)
+    ctx.logger.info(`dsh-workbuddy-oauth: ${message}`)
   }
 
   const identity = {
@@ -426,7 +426,7 @@ export function apply(ctx: Context, config: Config): void {
     try {
       await shim.ready
     } catch (error: unknown) {
-      ctx.logger.error(`dsh-workbuddy-standalone: ${label} 回环端点启动失败`, error)
+      ctx.logger.error(`dsh-workbuddy-oauth: ${label} 回环端点启动失败`, error)
       return
     }
 
@@ -483,7 +483,7 @@ export function apply(ctx: Context, config: Config): void {
       ctx.emit('llm/adapters-updated')
     } catch (error: unknown) {
       // Contained per region: one region failing must not take the other down.
-      ctx.logger.error(`dsh-workbuddy-standalone: ${label} provider 注册失败`, error)
+      ctx.logger.error(`dsh-workbuddy-oauth: ${label} provider 注册失败`, error)
       void shim.close()
     }
   }
@@ -522,7 +522,7 @@ export function apply(ctx: Context, config: Config): void {
           }
         })
         .catch((error: unknown) => {
-          ctx.logger.warn('dsh-workbuddy-standalone: 账号轮询失败', error)
+          ctx.logger.warn('dsh-workbuddy-oauth: 账号轮询失败', error)
         })
     }
   }, CREDENTIAL_POLL_MS)
@@ -593,7 +593,7 @@ export function apply(ctx: Context, config: Config): void {
     remove: removeAccountCompletely,
     userQuestions: ctx.get('userQuestions') as UserQuestionsService | undefined,
     warn: (message, error) => {
-      ctx.logger.warn(`dsh-workbuddy-standalone: ${message}`, error)
+      ctx.logger.warn(`dsh-workbuddy-oauth: ${message}`, error)
     },
   })
 

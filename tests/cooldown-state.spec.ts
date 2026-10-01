@@ -63,14 +63,14 @@ describe('readCooldowns', () => {
     // Selection must never fail because a state file is corrupt; the cost of
     // a lost cooldown map is one retry, the cost of a throwing read is a
     // broken provider.
-    const dir = join(home, 'workbuddy-standalone')
+    const dir = join(home, 'workbuddy-oauth')
     await mkdir(dir, { recursive: true })
     await writeFile(join(dir, COOLDOWN_STATE_FILENAME), '{not json')
     await expect(readCooldowns(1000)).resolves.toEqual(new Map())
   })
 
   it('rejects a wrong-format document rather than trusting it', async () => {
-    const dir = join(home, 'workbuddy-standalone')
+    const dir = join(home, 'workbuddy-oauth')
     await mkdir(dir, { recursive: true })
     await writeFile(join(dir, COOLDOWN_STATE_FILENAME), JSON.stringify({ version: 99, cooldowns: { 'uid-a': 5000 } }))
     await expect(readCooldowns(1000)).resolves.toEqual(new Map())
@@ -97,9 +97,9 @@ describe('writeCooldown', () => {
 
   it('writes no file when the entry is unchanged', async () => {
     await writeCooldown('uid-a', 5000, 1000)
-    const before = await readFile(join(home, 'workbuddy-standalone', COOLDOWN_STATE_FILENAME), 'utf8')
+    const before = await readFile(join(home, 'workbuddy-oauth', COOLDOWN_STATE_FILENAME), 'utf8')
     await writeCooldown('uid-a', 5000, 1000)
-    const after = await readFile(join(home, 'workbuddy-standalone', COOLDOWN_STATE_FILENAME), 'utf8')
+    const after = await readFile(join(home, 'workbuddy-oauth', COOLDOWN_STATE_FILENAME), 'utf8')
     expect(after).toBe(before)
   })
 
@@ -108,7 +108,7 @@ describe('writeCooldown', () => {
     // outlived the test used to resolve its directory from the *restored*
     // environment and wrote into the real `~/.dsh`. The path must be captured
     // before the first await.
-    const path = join(home, 'workbuddy-standalone', COOLDOWN_STATE_FILENAME)
+    const path = join(home, 'workbuddy-oauth', COOLDOWN_STATE_FILENAME)
     const writing = writeCooldown('uid-race', 5000, 1000)
     // Simulate the harness restoring the environment while the write is still
     // in flight; the in-flight write must be unaffected.

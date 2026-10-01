@@ -26,7 +26,7 @@
  * discriminator) follows the reference implementations, which are the ones
  * observed working against the live upstream.
  *
- * @module dsh-workbuddy-standalone/refresh
+ * @module dsh-workbuddy-oauth/refresh
  */
 
 import { withFileLock } from '@deepseek-ai/dsh-atomic-write'

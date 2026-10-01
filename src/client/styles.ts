@@ -31,11 +31,11 @@
  * the danger fill, which has no token because the host has no danger button.
  * A renamed token degrades appearance but cannot break rendering.
  *
- * @module dsh-workbuddy-standalone/client/styles
+ * @module dsh-workbuddy-oauth/client/styles
  */
 
 /** Marks the injected tag, and keeps a second injection from duplicating it. */
-const STYLE_TAG_ID = 'dsh-workbuddy-standalone/client'
+const STYLE_TAG_ID = 'dsh-workbuddy-oauth/client'
 
 /**
  * Card stylesheet.
@@ -421,7 +421,7 @@ export function installStyles(): void {
   if (typeof document === 'undefined') return
   if (document.querySelector(`style[data-plugin-css="${STYLE_TAG_ID}"]`) !== null) return
   const tag = document.createElement('style')
-  tag.dataset['plugin'] = 'dsh-workbuddy-standalone'
+  tag.dataset['plugin'] = 'dsh-workbuddy-oauth'
   tag.dataset['pluginCss'] = STYLE_TAG_ID
   tag.textContent = CSS
   document.head.appendChild(tag)

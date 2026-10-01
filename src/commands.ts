@@ -27,7 +27,7 @@
  * instructions to re-run the command, which keeps the feature usable rather
  * than turning a missing UI service into an error.
  *
- * @module dsh-workbuddy-standalone/commands
+ * @module dsh-workbuddy-oauth/commands
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -339,7 +339,7 @@ export function registerCommands(
         return {
           kind: 'success',
           text: [
-            `dsh-workbuddy-standalone v${PLUGIN_VERSION}`,
+            `dsh-workbuddy-oauth v${PLUGIN_VERSION}`,
             '',
             renderAccounts(credentials, disabled),
           ].join('\n'),

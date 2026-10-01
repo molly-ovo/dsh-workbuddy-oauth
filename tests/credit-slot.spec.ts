@@ -1,7 +1,7 @@
 /**
  * The credits slot's decision, including the state that used to break.
  *
- * @module dsh-workbuddy-standalone/tests/credit-slot.spec
+ * @module dsh-workbuddy-oauth/tests/credit-slot.spec
  */
 
 import { describe, expect, it } from 'vitest'

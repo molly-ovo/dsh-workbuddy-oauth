@@ -7,7 +7,7 @@
  * a second copy is how the two halves start disagreeing about what a valid
  * document is.
  *
- * @module dsh-workbuddy-standalone/client/host
+ * @module dsh-workbuddy-oauth/client/host
  */
 
 import {

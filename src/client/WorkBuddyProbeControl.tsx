@@ -13,7 +13,7 @@
  * row — every other selection renders nothing, which is what keeps the icon off
  * non-WorkBuddy models.
  *
- * @module dsh-workbuddy-standalone/client/WorkBuddyProbeControl
+ * @module dsh-workbuddy-oauth/client/WorkBuddyProbeControl
  */
 
 import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'

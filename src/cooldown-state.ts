@@ -14,7 +14,7 @@
  * The file is read when the store is built and on every write, so two DSH
  * windows stay consistent the same way the disabled set is.
  *
- * @module dsh-workbuddy-standalone/cooldown-state
+ * @module dsh-workbuddy-oauth/cooldown-state
  */
 
 import { readFile, mkdir } from 'node:fs/promises'

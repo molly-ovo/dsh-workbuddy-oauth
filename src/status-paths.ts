@@ -11,7 +11,7 @@
  * browser bundle, where a value import of anything Node-specific would either
  * fail the bundle-purity gate or silently pull a polyfill.
  *
- * @module dsh-workbuddy-standalone/status-paths
+ * @module dsh-workbuddy-oauth/status-paths
  */
 
 import type { WorkBuddyRegion } from './region.ts'
@@ -21,7 +21,7 @@ import type { WorkBuddyProbeValidation } from './probe-store.ts'
 export type { WorkBuddyCredits } from './upstream.ts'
 
 /** Read-only status endpoint consumed by this plugin's browser half. */
-export const WORKBUDDY_STATUS_PATH = '/plugins/dsh-workbuddy-standalone/status'
+export const WORKBUDDY_STATUS_PATH = '/plugins/dsh-workbuddy-oauth/status'
 
 /**
  * State-changing control endpoint.
@@ -43,10 +43,10 @@ export const WORKBUDDY_STATUS_PATH = '/plugins/dsh-workbuddy-standalone/status'
  * independently, and a shared *expression* is one build-config drift away from
  * the card asking a route the host never mounted.
  */
-export const WORKBUDDY_CONTROL_PATH = '/plugins/dsh-workbuddy-standalone/control'
+export const WORKBUDDY_CONTROL_PATH = '/plugins/dsh-workbuddy-oauth/control'
 
 /** Control endpoint for the international region. */
-export const WORKBUDDY_AI_CONTROL_PATH = '/plugins/dsh-workbuddy-standalone/ai/control'
+export const WORKBUDDY_AI_CONTROL_PATH = '/plugins/dsh-workbuddy-oauth/ai/control'
 
 /** The control path for one region. */
 export function controlPathFor(region: WorkBuddyRegion): string {
@@ -54,7 +54,7 @@ export function controlPathFor(region: WorkBuddyRegion): string {
 }
 
 /** Header carrying the in-process control key on a control request. */
-export const WORKBUDDY_CONTROL_KEY_HEADER = 'x-workbuddy-standalone-key'
+export const WORKBUDDY_CONTROL_KEY_HEADER = 'x-workbuddy-oauth-key'
 
 /** One signed-in account, as the card displays it. */
 export interface WorkBuddyWebAccount {

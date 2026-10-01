@@ -17,7 +17,7 @@ import { AttachmentStore } from "@deepseek-ai/dsh-attachment";
  * the CN API host and the CN web origin are deliberately *different* domains,
  * and the login endpoints check `Origin`.
  *
- * @module dsh-workbuddy-standalone/region
+ * @module dsh-workbuddy-oauth/region
  */
 /** Which WorkBuddy deployment a credential belongs to. */
 type WorkBuddyRegion = 'cn' | 'global';
@@ -248,11 +248,11 @@ declare function displayNameOf(credential: WorkBuddyCredential): string;
 /**
  * Build-time injected plugin version.
  *
- * `tsdown.config.ts` defines `__DSH_WORKBUDDY_STANDALONE_VERSION__` from
+ * `tsdown.config.ts` defines `__DSH_WORKBUDDY_OAUTH_VERSION__` from
  * package.json. The declare + fallback keeps `tsc --noEmit` and vitest working
  * on source that has not been through the bundler.
  *
- * @module dsh-workbuddy-standalone/version
+ * @module dsh-workbuddy-oauth/version
  */
 /** Version of this plugin, as published in package.json. */
 declare const PLUGIN_VERSION: string;
@@ -293,7 +293,7 @@ declare const PLUGIN_VERSION: string;
  * So this module is applied to outbound API calls and *not* to sign-in, which
  * also keeps a sign-in from being tied to a device identity it does not need.
  *
- * @module dsh-workbuddy-standalone/fingerprint
+ * @module dsh-workbuddy-oauth/fingerprint
  */
 /**
  * Derive a stable identifier for one account and purpose.
@@ -463,7 +463,7 @@ declare function createCredentialStore(options?: CredentialStoreOptions): Creden
  * The file is read when the store is built and on every write, so two DSH
  * windows stay consistent the same way the disabled set is.
  *
- * @module dsh-workbuddy-standalone/cooldown-state
+ * @module dsh-workbuddy-oauth/cooldown-state
  */
 /** Name of the state file inside the plugin state directory. */
 declare const COOLDOWN_STATE_FILENAME = "cooldowns.json";
@@ -1258,7 +1258,7 @@ declare class WorkBuddyProbeService {
 //#endregion
 //#region src/status-paths.d.ts
 /** Read-only status endpoint consumed by this plugin's browser half. */
-declare const WORKBUDDY_STATUS_PATH = "/plugins/dsh-workbuddy-standalone/status";
+declare const WORKBUDDY_STATUS_PATH = "/plugins/dsh-workbuddy-oauth/status";
 /**
  * State-changing control endpoint.
  *
@@ -1279,13 +1279,13 @@ declare const WORKBUDDY_STATUS_PATH = "/plugins/dsh-workbuddy-standalone/status"
  * independently, and a shared *expression* is one build-config drift away from
  * the card asking a route the host never mounted.
  */
-declare const WORKBUDDY_CONTROL_PATH = "/plugins/dsh-workbuddy-standalone/control";
+declare const WORKBUDDY_CONTROL_PATH = "/plugins/dsh-workbuddy-oauth/control";
 /** Control endpoint for the international region. */
-declare const WORKBUDDY_AI_CONTROL_PATH = "/plugins/dsh-workbuddy-standalone/ai/control";
+declare const WORKBUDDY_AI_CONTROL_PATH = "/plugins/dsh-workbuddy-oauth/ai/control";
 /** The control path for one region. */
 declare function controlPathFor(region: WorkBuddyRegion): string;
 /** Header carrying the in-process control key on a control request. */
-declare const WORKBUDDY_CONTROL_KEY_HEADER = "x-workbuddy-standalone-key";
+declare const WORKBUDDY_CONTROL_KEY_HEADER = "x-workbuddy-oauth-key";
 /** One signed-in account, as the card displays it. */
 interface WorkBuddyWebAccount {
   uid: string;
@@ -1575,7 +1575,7 @@ declare function workBuddyStatusHandler(deps: WorkBuddyStatusRouteOptions): (req
 //#endregion
 //#region src/index.d.ts
 /** Stable Cordis plugin name. */
-declare const name = "llm-workbuddy-standalone";
+declare const name = "llm-workbuddy-oauth";
 /** The model registry required before the provider can register. */
 declare const inject: string[];
 /**
@@ -1592,9 +1592,9 @@ declare const inject: string[];
  * The prefix also keeps the two plugins' model groups distinguishable in the
  * picker, which is what a user comparing them needs.
  */
-declare const WORKBUDDY_PROVIDER = "workbuddy-standalone";
+declare const WORKBUDDY_PROVIDER = "workbuddy-oauth";
 /** Provider id for the international region. */
-declare const WORKBUDDY_AI_PROVIDER = "workbuddy-standalone-ai";
+declare const WORKBUDDY_AI_PROVIDER = "workbuddy-oauth-ai";
 /**
  * Provider id for one region.
  *

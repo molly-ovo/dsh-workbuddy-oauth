@@ -10,7 +10,7 @@
  * collapsed.** Collapsing hides the descriptive second line, never the result.
  * A balance that has been fetched is always shown, in every other state.
  *
- * @module dsh-workbuddy-standalone/client/credit-slot
+ * @module dsh-workbuddy-oauth/client/credit-slot
  */
 
 import type { WorkBuddyCredits } from '../upstream.ts'

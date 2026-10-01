@@ -33,7 +33,7 @@
  * So this module is applied to outbound API calls and *not* to sign-in, which
  * also keeps a sign-in from being tied to a device identity it does not need.
  *
- * @module dsh-workbuddy-standalone/fingerprint
+ * @module dsh-workbuddy-oauth/fingerprint
  */
 
 import { createHash } from 'node:crypto'

@@ -137,8 +137,8 @@ describe('provider ids', () => {
   })
 
   it('namespaces the ids under this package so a reader can tell them apart', () => {
-    expect(WORKBUDDY_PROVIDER.startsWith('workbuddy-standalone')).toBe(true)
-    expect(WORKBUDDY_AI_PROVIDER.startsWith('workbuddy-standalone')).toBe(true)
+    expect(WORKBUDDY_PROVIDER.startsWith('workbuddy-oauth')).toBe(true)
+    expect(WORKBUDDY_AI_PROVIDER.startsWith('workbuddy-oauth')).toBe(true)
   })
 })
 

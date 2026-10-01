@@ -19,7 +19,7 @@
  * The card never predicts an outcome locally. A toggle the host refused must not
  * look applied, so every action posts and then re-reads the truth.
  *
- * @module dsh-workbuddy-standalone/client/WorkBuddyConfigPage
+ * @module dsh-workbuddy-oauth/client/WorkBuddyConfigPage
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'

@@ -1,6 +1,6 @@
-# Register the standalone WorkBuddy provider. Unlike dsh-workbuddy-connect,
-# this plugin does NOT read the WorkBuddy desktop app's credentials: sign-in
-# happens through an OAuth device-code flow owned by this plugin.
+# Register the WorkBuddy provider. Unlike dsh-workbuddy-connect, this plugin
+# does NOT read the WorkBuddy desktop app's credentials: sign-in happens through
+# an OAuth device-code flow owned by this plugin.
 - insert:
-    - id: llm-workbuddy-standalone
-      name: dsh-workbuddy-standalone
+    - id: llm-workbuddy-oauth
+      name: dsh-workbuddy-oauth

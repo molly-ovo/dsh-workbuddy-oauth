@@ -16,7 +16,7 @@
  * ships. That file is uid-keyed and has no writer, so it would otherwise
  * outlive every account it names; see ./legacy-task-state.ts.
  *
- * @module dsh-workbuddy-standalone/account-purge
+ * @module dsh-workbuddy-oauth/account-purge
  */
 
 import { deleteCredential } from './credentials.ts'

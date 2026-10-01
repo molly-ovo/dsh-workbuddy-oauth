@@ -8,7 +8,7 @@
  * read by the ported code, and widening it for an enable flag would force a
  * format-version migration for a fact that is only about *selection*.
  *
- * @module dsh-workbuddy-standalone/account-state
+ * @module dsh-workbuddy-oauth/account-state
  */
 
 import { readFile, mkdir } from 'node:fs/promises'

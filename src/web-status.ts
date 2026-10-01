@@ -11,7 +11,7 @@
  * Kept free of `node:` imports beyond the type level so the tests can drive it
  * against stub collaborators.
  *
- * @module dsh-workbuddy-standalone/web-status
+ * @module dsh-workbuddy-oauth/web-status
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -208,5 +208,5 @@ export function registerWorkBuddyStatusRoute(ctx: Context, deps: WorkBuddyStatus
     return () => {
       dispose()
     }
-  }, 'dsh-workbuddy-standalone: status route')
+  }, 'dsh-workbuddy-oauth: status route')
 }

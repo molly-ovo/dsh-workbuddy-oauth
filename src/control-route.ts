@@ -20,7 +20,7 @@
  * this plugin has not reached, and carrying their branches would mean shipping
  * routes that answer 404 by construction.
  *
- * @module dsh-workbuddy-standalone/control-route
+ * @module dsh-workbuddy-oauth/control-route
  */
 
 import { randomBytes, timingSafeEqual } from 'node:crypto'
@@ -341,5 +341,5 @@ export function registerWorkBuddyControlRoute(
     return () => {
       dispose()
     }
-  }, 'dsh-workbuddy-standalone: control route')
+  }, 'dsh-workbuddy-oauth: control route')
 }

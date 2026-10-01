@@ -39,7 +39,7 @@ describe('hidden-models state', () => {
 
   it('reads an absent or damaged file as both regions empty', async () => {
     await expect(readHiddenModels()).resolves.toEqual({ cn: [], global: [] })
-    const dir = join(home, 'workbuddy-standalone')
+    const dir = join(home, 'workbuddy-oauth')
     await mkdir(dir, { recursive: true })
     await writeFile(join(dir, HIDDEN_MODELS_FILENAME), '{not json')
     await expect(readHiddenModels()).resolves.toEqual({ cn: [], global: [] })

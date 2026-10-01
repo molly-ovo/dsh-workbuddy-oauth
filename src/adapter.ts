@@ -3,7 +3,7 @@
  * into the Harness LLM seam, assembled from public `dsh-llm-pi-ai`
  * extension points the way `dsh-codex-connect` assembles its Codex route.
  *
- * @module dsh-workbuddy-connect/adapter
+ * @module dsh-workbuddy-oauth/adapter
  */
 
 import { createProvider } from '@earendil-works/pi-ai'
@@ -50,7 +50,7 @@ const INERT_AUTH: { credentials: CredentialStore; authContext: AuthContext } = {
     async read() { return undefined },
     async list() { return [] },
     async modify() {
-      throw new Error('dsh-workbuddy-connect: the workbuddy route has no pi-ai credential lifecycle')
+      throw new Error('dsh-workbuddy-oauth: the workbuddy route has no pi-ai credential lifecycle')
     },
     async delete() {},
   },
@@ -358,7 +358,7 @@ export function createWorkBuddyAdapter(options: WorkBuddyAdapterOptions): WorkBu
     provider: providerId,
     displayName,
     streamIdleTimeoutMs: WORKBUDDY_STREAM_IDLE_TIMEOUT_MS,
-    retryPolicy: resolveRetryPolicy(undefined, 'dsh-workbuddy-connect retryPolicy'),
+    retryPolicy: resolveRetryPolicy(undefined, 'dsh-workbuddy-oauth retryPolicy'),
     configuredMaxTokens: new Map(),
     // Required since 0.1.5-alpha.2; the live catalog only exposes models that
     // probed successfully, so there is never a per-model failure to report.
