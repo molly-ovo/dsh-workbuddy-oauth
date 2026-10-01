@@ -28,8 +28,7 @@
     "lib",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE",
-    "THIRD-PARTY-NOTICES.md"
+    "LICENSE"
   ],
   "license": "MIT",
   "dsh": {

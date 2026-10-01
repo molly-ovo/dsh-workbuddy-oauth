@@ -62,3 +62,8 @@ settings.yml
 # DSH 本地 profile 数据（可能含已安装插件的清单与凭据）
 .workbuddy-probe.json
 .dsh/
+
+# 本地手工备份 / 草稿（如 README.bak.md）
+README.bak.md
+README.old.md
+README.orig.md
