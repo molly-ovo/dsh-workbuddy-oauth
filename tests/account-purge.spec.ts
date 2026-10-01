@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { purgeAccount } from '../src/account-purge.ts'
-import { disabledUids, forgetAccount, setAccountDisabled } from '../src/account-state.ts'
+import { disabledUids, setAccountDisabled } from '../src/account-state.ts'
 import { clearCooldown, readCooldowns, writeCooldown } from '../src/cooldown-state.ts'
 import { credentialPath, listCredentials, writeCredential, type WorkBuddyCredential } from '../src/credentials.ts'
 import { LEGACY_TASK_STATE_FILENAME } from '../src/legacy-task-state.ts'
@@ -175,18 +175,6 @@ describe('per-account state helpers', () => {
     const remaining = await readCooldowns()
     expect(remaining.has('uid-a')).toBe(false)
     expect(remaining.has('uid-b')).toBe(true)
-  })
-
-  it('forgetAccount removes one uid and reports whether it existed', async () => {
-    await setAccountDisabled('uid-a', true)
-    await setAccountDisabled('uid-b', true)
-
-    await expect(forgetAccount('uid-a')).resolves.toBe(true)
-    await expect(forgetAccount('uid-a')).resolves.toBe(false)
-
-    const disabled = await disabledUids()
-    expect(disabled.has('uid-a')).toBe(false)
-    expect(disabled.has('uid-b')).toBe(true)
   })
 
   it('keeps an enabled account out of the disabled set', async () => {

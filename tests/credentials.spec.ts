@@ -171,13 +171,6 @@ describe('phone masking', () => {
     expect(maskPhoneNumbers('13800138000')).toBe('13*******00')
   })
 
-  it('leaves only two digits on each side, hiding seven of eleven', () => {
-    // Three-and-three left the carrier prefix and only five hidden digits; the
-    // fourth digit belongs to the subscriber's own segment.
-    expect(maskPhoneNumbers('13800138000')).toHaveLength(11)
-    expect(maskPhoneNumbers('13800138000').replace(/\*/g, '')).toBe('1300')
-  })
-
   it('masks a number embedded in a longer name', () => {
     expect(maskPhoneNumbers('张三 13800138000')).toBe('张三 13*******00')
     expect(maskPhoneNumbers('13800138000(工作)')).toBe('13*******00(工作)')
@@ -239,8 +232,12 @@ describe('email masking', () => {
     expect(maskEmailAddresses('a@x.com / b@y.org')).toBe('a***@x.com / b***@y.org')
   })
 
-  it('does not start a match mid-token', () => {
-    expect(maskEmailAddresses('xxb@y.com')).toBe('x***@y.com')
+  it('does not treat a second @ as the start of another address', () => {
+    // The leading guard's real job. After `user@x.com` is consumed, the next `@`
+    // is preceded by characters the local-part class accepts, so without the
+    // guard the tail `@y.com` matches with `..` as its local part and gets
+    // masked as if it were an address of its own.
+    expect(maskEmailAddresses('user@x.com..@y.com')).toBe('u***@x.com..@y.com')
   })
 
   it('applies through displayNameOf alongside phone masking', () => {
