@@ -12,7 +12,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { disabledUids, setAccountDisabled, DISABLED_ACCOUNTS_FILENAME } from '../src/account-state.ts'
+import { disabledUids, setAccountDisabled, forgetAccount, DISABLED_ACCOUNTS_FILENAME } from '../src/account-state.ts'
 import { stateFilePath } from '../src/credentials.ts'
 
 let home: string
@@ -59,6 +59,24 @@ describe('account disabled state', () => {
     const { writeFile, mkdir } = await import('node:fs/promises')
     await mkdir(stateFilePath('.'), { recursive: true })
     await writeFile(stateFilePath(DISABLED_ACCOUNTS_FILENAME), '{not json', 'utf8')
+    expect([...(await disabledUids())]).toEqual([])
+  })
+
+  it('forgets one account without disturbing the others', async () => {
+    await setAccountDisabled('uid-a', true)
+    await setAccountDisabled('uid-b', true)
+
+    await expect(forgetAccount('uid-a')).resolves.toBe(true)
+    // Already gone: reports `false` rather than throwing, because every removal
+    // path calls this unconditionally.
+    await expect(forgetAccount('uid-a')).resolves.toBe(false)
+
+    expect([...(await disabledUids())]).toEqual(['uid-b'])
+  })
+
+  it('leaves no file behind when the last disabled account is forgotten', async () => {
+    await setAccountDisabled('uid-a', true)
+    await forgetAccount('uid-a')
     expect([...(await disabledUids())]).toEqual([])
   })
 })

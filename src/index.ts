@@ -40,7 +40,7 @@ import { createWorkBuddyShim } from './shim.ts'
 import { createCredentialStore } from './store.ts'
 import { WorkBuddyUpstreamClient } from './upstream.ts'
 import { credentialFromLogin, displayNameOf, listCredentials, probePathFor, type WorkBuddyCredential } from './credentials.ts'
-import { setAccountDisabled } from './account-state.ts'
+import { setAccountDisabled, forgetAccount } from './account-state.ts'
 import { purgeAccount } from './account-purge.ts'
 import { readHiddenModels, setRegionHiddenModels } from './hidden-models.ts'
 import { readUseMaximumContextWindow, writeUseMaximumContextWindow } from './preferences.ts'
@@ -542,6 +542,12 @@ export function apply(ctx: Context, config: Config): void {
     const result = await logins.complete(state)
     const credential = credentialFromLogin(result)
     await saveAccount(credential)
+    // A fresh sign-in is an explicit "I want to use this account", so any
+    // disable flag left over from an earlier session is cleared. Without this,
+    // signing back into an account that was disabled before it was signed out
+    // returns it *still* disabled: the credential is stored, nothing selects it,
+    // and every surface reports it as disabled with no way to tell why.
+    await forgetAccount(credential.uid)
     // Refresh immediately so the models are selectable without waiting for the
     // periodic poll.
     await Promise.all(runtimes.map((runtime) => refreshCatalog(ctx, runtime, log, 'login')))
