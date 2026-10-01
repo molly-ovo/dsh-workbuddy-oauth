@@ -1,8 +1,12 @@
 # 依赖
 node_modules/
 
-# 构建产物（tsdown 输出到 lib/，`dist/` 留作其它工具兜底）
-lib/
+# 构建产物
+#
+# `lib/` 是 tsdown 的输出目录，**有意提交**：这个仓库同时充当可安装的插件包，
+# 提交产物才能让 `dsh plugin add <git-url>` 直接可用，不必先装 pnpm 再构建。
+# 代价是改完 `src/` 必须重新 `pnpm build` 并一并提交，否则仓库里的产物会落后于源码。
+# `dist/` 没有被 tsdown 使用，留作其它工具兜底，仍然忽略。
 dist/
 
 # 测试覆盖率（vitest 尚未开 coverage，先占位）
