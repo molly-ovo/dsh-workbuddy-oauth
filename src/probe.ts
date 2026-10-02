@@ -74,16 +74,43 @@ export type ProbeOutcome =
   | { validation: 'unknown'; efforts: readonly []; requests: number; reason: string }
 
 /**
- * The upstream's "this effort value is not supported" code, measured
- * 2026-09-11 (plan §4.2). It is *not* treated as a permanent protocol promise:
- * anything unrecognized degrades to `unknown` rather than to a capability
- * conclusion.
+ * Which endpoint's rejection vocabulary a probe interprets.
+ *
+ * The two apps talk to different upstreams, and those upstreams answer a bad
+ * `reasoning_effort` with *different* codes. Reading one shared set would widen
+ * attribution on the endpoint where a code was never observed.
  */
-const INVALID_EFFORT_CODE = 'invalid_reasoning_effort'
+export type ProbeRegion = 'cn' | 'global'
+
+/**
+ * The upstream's "this effort value is not supported" codes, per region, as
+ * measured on each live endpoint. The sets stay separate so a code only ever
+ * widens detection for the endpoint it was measured on.
+ *
+ * - `invalid_reasoning_effort` — the China endpoint, measured 2026-09-11
+ *   (plan §4.2). Kept for `global` too as the spelling already in the wild.
+ * - `model_param_invalid` — the global endpoint, measured 2026-10-01. A
+ *   non-canonical value is answered `400` / `11133` with this code, which names
+ *   no field (`extError.param` is empty) rather than naming the effort.
+ *
+ * A generic code is readable here only because the baseline step has already
+ * proved the *same* request without `reasoning_effort` succeeds, leaving the
+ * sentinel as the only difference between the two attempts. That is also why it
+ * is *not* added to `cn`: that endpoint was measured answering the specific
+ * code, and accepting a generic one there would attribute beyond what was seen.
+ *
+ * Neither is a permanent protocol promise: anything unrecognized still degrades
+ * to `unknown` rather than to a capability conclusion.
+ */
+const INVALID_EFFORT_CODES: Record<ProbeRegion, ReadonlySet<string>> = {
+  cn: new Set(['invalid_reasoning_effort']),
+  global: new Set(['invalid_reasoning_effort', 'model_param_invalid']),
+}
 
 /** Whether an attempt is an attributable rejection of the effort value. */
-function isEffortRejection(attempt: ProbeAttempt): boolean {
-  return attempt.status === 400 && attempt.errorCode === INVALID_EFFORT_CODE
+function isEffortRejection(attempt: ProbeAttempt, region: ProbeRegion): boolean {
+  const codes = INVALID_EFFORT_CODES[region]
+  return attempt.status === 400 && attempt.errorCode !== undefined && codes.has(attempt.errorCode)
 }
 
 /** Whether an attempt shows the upstream accepted the request and streamed. */
@@ -102,17 +129,21 @@ function unknownReason(stage: string, attempt: ProbeAttempt): string {
  * Probe one model.
  *
  * `options.candidates` exists so tests can shorten the sweep; production always
- * uses {@link PROBE_EFFORT_CANDIDATES}.
+ * uses {@link PROBE_EFFORT_CANDIDATES}. `options.region` selects which
+ * endpoint's rejection vocabulary is read; it defaults to `cn`, matching the
+ * China app that was the first target.
  */
 export async function probeModel(options: {
   send: ProbeSender
   sentinel?: SentinelFactory
   candidates?: readonly WorkBuddyEffort[]
   timeoutMs?: number
+  region?: ProbeRegion
 }): Promise<ProbeOutcome> {
   const sentinel = options.sentinel ?? randomSentinel
   const candidates = options.candidates ?? PROBE_EFFORT_CANDIDATES
   const timeoutMs = options.timeoutMs ?? PROBE_REQUEST_TIMEOUT_MS
+  const region = options.region ?? 'cn'
   let requests = 0
 
   const attempt = async (effort: string | undefined): Promise<ProbeAttempt> => {
@@ -145,7 +176,7 @@ export async function probeModel(options: {
     // requests producing false positives.
     return { validation: 'non-validating', efforts: [], requests }
   }
-  if (!isEffortRejection(sentinelAttempt)) {
+  if (!isEffortRejection(sentinelAttempt, region)) {
     return { validation: 'unknown', efforts: [], requests, reason: unknownReason('sentinel', sentinelAttempt) }
   }
 
@@ -157,7 +188,7 @@ export async function probeModel(options: {
       accepted.push(effort)
       continue
     }
-    if (isEffortRejection(levelAttempt)) continue
+    if (isEffortRejection(levelAttempt, region)) continue
     // A non-decisive answer mid-sweep: the partial list is not a finding, so
     // report the whole run as unknown rather than under-claiming a model.
     return {

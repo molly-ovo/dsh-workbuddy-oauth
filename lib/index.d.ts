@@ -548,16 +548,27 @@ type ProbeOutcome = {
   reason: string;
 };
 /**
+ * Which endpoint's rejection vocabulary a probe interprets.
+ *
+ * The two apps talk to different upstreams, and those upstreams answer a bad
+ * `reasoning_effort` with *different* codes. Reading one shared set would widen
+ * attribution on the endpoint where a code was never observed.
+ */
+type ProbeRegion = 'cn' | 'global';
+/**
  * Probe one model.
  *
  * `options.candidates` exists so tests can shorten the sweep; production always
- * uses {@link PROBE_EFFORT_CANDIDATES}.
+ * uses {@link PROBE_EFFORT_CANDIDATES}. `options.region` selects which
+ * endpoint's rejection vocabulary is read; it defaults to `cn`, matching the
+ * China app that was the first target.
  */
 declare function probeModel(options: {
   send: ProbeSender;
   sentinel?: SentinelFactory;
   candidates?: readonly WorkBuddyEffort[];
   timeoutMs?: number;
+  region?: ProbeRegion;
 }): Promise<ProbeOutcome>;
 //#endregion
 //#region src/upstream.d.ts
@@ -1212,6 +1223,14 @@ interface WorkBuddyProbeServiceOptions {
    * probe completes *after* the switch has already happened.
    */
   account: () => string | undefined;
+  /**
+   * Which endpoint's rejection vocabulary sweeps read.
+   *
+   * The two apps talk to different upstreams that answer a bad effort with
+   * different codes, so each runtime passes its own region rather than sharing
+   * one widening set.
+   */
+  region: ProbeRegion;
   sentinel?: SentinelFactory;
   /** Injectable for tests; defaults to the live upstream sender. */
   send?: (modelId: string) => ProbeSender;

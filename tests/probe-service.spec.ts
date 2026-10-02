@@ -16,7 +16,7 @@ import { WorkBuddyCatalog } from '../src/catalog.ts'
 import type { CredentialStore } from '../src/store.ts'
 import type { WorkBuddyUpstreamClient } from '../src/upstream.ts'
 import type { WorkBuddyModelInfo } from '../src/catalog.ts'
-import type { ProbeAttempt } from '../src/probe.ts'
+import type { ProbeAttempt, ProbeRegion } from '../src/probe.ts'
 
 /** A model with no declared effort set — the probe candidate. */
 const UNDECLARED: WorkBuddyModelInfo = {
@@ -34,6 +34,7 @@ function makeService(options: {
   models?: readonly WorkBuddyModelInfo[]
   consent?: () => boolean
   account?: () => string | undefined
+  region?: ProbeRegion
   send?: (modelId: string) => (effort: string | undefined, signal: AbortSignal) => Promise<ProbeAttempt>
 } = {}): WorkBuddyProbeService {
   const catalog = new WorkBuddyCatalog(options.models ?? [UNDECLARED])
@@ -50,6 +51,8 @@ function makeService(options: {
     catalog,
     credentials,
     client,
+    // The China vocabulary; the region-specific test below passes `global`.
+    region: options.region ?? 'cn',
     consent: options.consent ?? (() => false),
     account: options.account ?? (() => 'uid-1:'),
     ...(options.send === undefined ? {} : { send: options.send }),
@@ -117,5 +120,65 @@ describe('WorkBuddyProbeService', () => {
     })
     const outcome = await service.probe('hy3', true)
     expect(outcome.state).toBe('ok')
+  })
+})
+
+/**
+ * The rejection vocabulary is per region.
+ *
+ * The China and international endpoints answer a non-canonical
+ * `reasoning_effort` with *different* codes: `invalid_reasoning_effort` on one,
+ * `model_param_invalid` on the other. A probe reading a single shared code
+ * therefore reads the other endpoint's rejection as an unattributable answer
+ * and reports `unknown` — which the card shows as "detection did not finish",
+ * with no way to tell it apart from a real failure.
+ *
+ * These tests fail if the two vocabularies are ever collapsed back into one.
+ */
+describe('per-region effort-rejection vocabulary', () => {
+  /** Answers the way the named endpoint answers a bad effort value. */
+  function senderRejectingWith(code: string) {
+    return () => async (effort: string | undefined): Promise<ProbeAttempt> => {
+      // The baseline (no effort) must succeed, or nothing can be attributed.
+      if (effort === undefined) return { status: 200, streamed: true }
+      return { status: 400, streamed: false, errorCode: code }
+    }
+  }
+
+  it('reads the global endpoint\'s own rejection code', async () => {
+    const service = makeService({
+      consent: () => true,
+      region: 'global',
+      send: senderRejectingWith('model_param_invalid'),
+    })
+    const outcome = await service.probe('hy3', true)
+    // Every candidate is refused, so the sweep completes with an empty set —
+    // the sentinel rejection was attributed, which is what makes this run
+    // decisive rather than `unknown`.
+    expect(outcome).toMatchObject({ state: 'ok', validation: 'validating', efforts: [] })
+  })
+
+  it('does not widen the China endpoint with the global code', async () => {
+    // The generic code was measured on the global endpoint only. Reading it on
+    // China would attribute rejections to a code never observed there.
+    const service = makeService({
+      consent: () => true,
+      region: 'cn',
+      send: senderRejectingWith('model_param_invalid'),
+    })
+    const outcome = await service.probe('hy3', true)
+    expect(outcome.state).toBe('unavailable')
+    expect(outcome).toMatchObject({ reason: expect.stringContaining('model_param_invalid') })
+  })
+
+  it('still reads the China endpoint\'s code on the global endpoint', async () => {
+    // Kept on both: the spelling was already in the wild for global rosters.
+    const service = makeService({
+      consent: () => true,
+      region: 'global',
+      send: senderRejectingWith('invalid_reasoning_effort'),
+    })
+    const outcome = await service.probe('hy3', true)
+    expect(outcome).toMatchObject({ state: 'ok', validation: 'validating' })
   })
 })

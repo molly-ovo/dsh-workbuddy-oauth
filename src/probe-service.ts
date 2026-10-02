@@ -17,7 +17,7 @@
 
 import type { CredentialStore } from './store.ts'
 import type { WorkBuddyCatalog } from './catalog.ts'
-import { probeModel, type ProbeSender, type SentinelFactory } from './probe.ts'
+import { probeModel, type ProbeRegion, type ProbeSender, type SentinelFactory } from './probe.ts'
 import { fingerprintModel, type WorkBuddyProbeRecord, type WorkBuddyProbeStore } from './probe-store.ts'
 import type { WorkBuddyUpstreamClient } from './upstream.ts'
 
@@ -45,6 +45,14 @@ export interface WorkBuddyProbeServiceOptions {
    * probe completes *after* the switch has already happened.
    */
   account: () => string | undefined
+  /**
+   * Which endpoint's rejection vocabulary sweeps read.
+   *
+   * The two apps talk to different upstreams that answer a bad effort with
+   * different codes, so each runtime passes its own region rather than sharing
+   * one widening set.
+   */
+  region: ProbeRegion
   sentinel?: SentinelFactory
   /** Injectable for tests; defaults to the live upstream sender. */
   send?: (modelId: string) => ProbeSender
@@ -158,6 +166,7 @@ export class WorkBuddyProbeService {
       try {
         const outcome = await probeModel({
           send,
+          region: this.options.region,
           ...this.options.sentinel === undefined ? {} : { sentinel: this.options.sentinel },
         })
         // The account may have changed while the requests were in flight. Drop

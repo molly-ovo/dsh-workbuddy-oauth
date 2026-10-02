@@ -251,6 +251,9 @@ function createRegionRuntime(
     catalog,
     credentials: store,
     client,
+    // The two endpoints answer a rejected effort with different codes, so each
+    // runtime reads only the vocabulary measured on its own endpoint.
+    region,
     consent,
     account: () => account,
   })
