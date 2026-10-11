@@ -1149,6 +1149,11 @@ declare function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddySh
 interface WorkBuddyAdapterOptions {
   providerId?: string;
   displayName?: string;
+  /**
+   * Region this adapter serves, from the variant descriptor. Decides only
+   * whether the CN `onlyReasoning` veto hides `off` (#87); defaults to `'cn'`.
+   */
+  region?: WorkBuddyRegion;
   shim: WorkBuddyShim;
   store: CredentialStore;
   catalog: WorkBuddyCatalog;

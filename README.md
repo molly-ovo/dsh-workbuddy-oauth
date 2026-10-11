@@ -7,7 +7,7 @@
 - **多账号**——同时登录多个，选号时自动跳过被限流的；某个账号额度耗尽**只停它一个**，其余照常服务。
 - **会话粘性**——同一个对话粘住同一个账号，不会中途换人；但**不粘坏账号**，下一条消息就换到健康的那个，上下文不丢。
 
-![license](https://img.shields.io/badge/license-MIT-blue.svg) ![tests](https://img.shields.io/badge/tests-259%20passing-brightgreen.svg) ![node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-green.svg)
+![license](https://img.shields.io/badge/license-MIT-blue.svg) ![tests](https://img.shields.io/badge/tests-296%20passing-brightgreen.svg) ![node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-green.svg)
 
 ---
 

@@ -31,13 +31,51 @@ describe('reasoningFields', () => {
       .toEqual({ reasoning: false })
   })
 
-  it('offers the declared set and nothing else', () => {
+  it('withholds `off` on CN from a model that declares it can only reason', () => {
+    // #87: the CN catalog ships `onlyReasoning: true` together with
+    // `canDisableThinking: true` on `glm-5.3-flash` and `kimi-k2.8-preview`.
+    // The two cannot both hold, and the endpoint sides with `onlyReasoning` —
+    // it answers HTTP 400 / 11150 for the literal spelling, so the level would
+    // only ever produce a failed request.
     const fields = reasoningFields(model({
       supports: true, onlyReasoning: true, supportedEfforts: ['low', 'high'], defaultEffort: 'high', canDisableThinking: true,
     }))
     expect(fields.reasoning).toBe(true)
     expect(fields.thinkingLevelMap).toEqual({
+      off: null, minimal: null, low: 'low', medium: null, high: 'high', xhigh: null, max: null,
+    })
+  })
+
+  it('keeps `off` on Global for the same contradictory declaration', () => {
+    // The international roster carries the same pair on rows that *do* accept
+    // `off`, so the veto must not leak across regions (#87, 14f120f).
+    const fields = reasoningFields(model({
+      supports: true, onlyReasoning: true, supportedEfforts: ['low', 'high'], defaultEffort: 'high', canDisableThinking: true,
+    }), undefined, 'global')
+    expect(fields.reasoning).toBe(true)
+    expect(fields.thinkingLevelMap).toEqual({
       off: 'off', minimal: null, low: 'low', medium: null, high: 'high', xhigh: null, max: null,
+    })
+  })
+
+  it('keeps `off` on CN when the row does not claim to only reason', () => {
+    const fields = reasoningFields(model({
+      supports: true, onlyReasoning: false, supportedEfforts: ['low', 'high'], defaultEffort: 'high', canDisableThinking: true,
+    }))
+    expect(fields.reasoning).toBe(true)
+    expect(fields.thinkingLevelMap).toEqual({
+      off: 'off', minimal: null, low: 'low', medium: null, high: 'high', xhigh: null, max: null,
+    })
+  })
+
+  it('withholds `off` on CN on the default-effort fallback path too', () => {
+    // The veto is a property of the row, not of which branch supplied the set.
+    const fields = reasoningFields(model({
+      supports: true, onlyReasoning: true, defaultEffort: 'high', canDisableThinking: true,
+    }))
+    expect(fields.reasoning).toBe(true)
+    expect(fields.thinkingLevelMap).toEqual({
+      off: null, minimal: null, low: null, medium: null, high: 'high', xhigh: null, max: null,
     })
   })
 

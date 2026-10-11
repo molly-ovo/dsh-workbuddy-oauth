@@ -75,3 +75,6 @@ settings.yml
 README.bak.md
 README.old.md
 README.orig.md
+
+# 变更前的原始文件备份（仅本地留档，不进仓库）
+backup/

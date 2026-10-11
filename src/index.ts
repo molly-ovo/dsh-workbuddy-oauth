@@ -55,6 +55,7 @@ import { WorkBuddyProbeService } from './probe-service.ts'
 import { createControlKey, registerWorkBuddyControlRoute } from './control-route.ts'
 import { registerWorkBuddyStatusRoute } from './web-status.ts'
 import { controlPathFor } from './status-paths.ts'
+import { piAiVersionWarning } from './pi-ai-guard.ts'
 
 export { PLUGIN_VERSION } from './version.ts'
 export { deriveId, deviceHeaders, requestId } from './fingerprint.ts'
@@ -352,6 +353,12 @@ export function apply(ctx: Context, config: Config): void {
     ctx.logger.info(`dsh-workbuddy-oauth: ${message}`)
   }
 
+  // Report a shadowed pi-ai copy once, at load. See pi-ai-guard.ts: the plugin
+  // still runs, but a mismatched generation otherwise surfaces only as an
+  // opaque PI_AI_ERROR on the first request (issue #92).
+  const piAiWarning = piAiVersionWarning()
+  if (piAiWarning !== undefined) ctx.logger.warn(`dsh-workbuddy-oauth: ${piAiWarning}`)
+
   const identity = {
     ...(config.appVersion !== undefined && config.appVersion !== '' ? { appVersion: config.appVersion } : {}),
     ...(config.cliVersion !== undefined && config.cliVersion !== '' ? { cliVersion: config.cliVersion } : {}),
@@ -445,6 +452,9 @@ export function apply(ctx: Context, config: Config): void {
         // groups — a user with both installed compares them side by side, and a
         // collision-free name is the only thing that tells the groups apart.
         displayName: regionEndpoints(region).label,
+        // Which endpoint this adapter serves. Only the CN `onlyReasoning`
+        // veto reads it (#87); the request-level `off` strip covers both.
+        region,
         shim,
         store: runtime.store,
         catalog: runtime.catalog,
