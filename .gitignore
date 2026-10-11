@@ -53,6 +53,10 @@ preferences.json
 compatibility.json
 
 # 凭据 / 环境 / 密钥
+#
+# `.gh_token` 是本地 GitHub PAT 文件，只用于本机推送，绝不进仓库。
+# 一个 PAT 一旦被提交就等于泄露、必须立即吊销，所以这里必须忽略。
+.gh_token
 .env
 .env.*
 *.pem
