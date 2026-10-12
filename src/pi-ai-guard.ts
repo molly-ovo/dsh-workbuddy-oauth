@@ -2,15 +2,19 @@
  * Confirm the pi-ai copy this plugin actually loaded is the generation the DSH
  * 0.2.0-rc.2 host was built against.
  *
- * #92's failure mode: a pnpm profile with `nodeLinker: hoisted` and
- * `autoInstallPeers: false` installs no peer for us, so a co-installed
- * plugin's older pi-ai sits at the profile root and wins bare-specifier
- * resolution. The host then adds a system message (pi-ai 0.87's
- * `collapseSystemMessages`) and the older copy answers `estimateMessageTokens`
- * by reading `.length` off a block it does not model — every request dies at
- * `PI_AI_ERROR` before any upstream HTTP. Declaring pi-ai as a regular
- * dependency (package.json) is the fix; this module exists so a future
- * regression reports *what* it loaded instead of that opaque crash.
+ * pi-ai is a peer dependency here, so the profile resolves the copy the host
+ * itself uses. #92's failure mode is what that arrangement has to survive: a
+ * pnpm profile with `nodeLinker: hoisted` and `autoInstallPeers: false` puts
+ * every package at the profile root, so a co-installed plugin's older pi-ai can
+ * win bare-specifier resolution. The host then adds a system message (pi-ai
+ * 0.87's `collapseSystemMessages`) and the older copy answers
+ * `estimateMessageTokens` by reading `.length` off a block it does not model —
+ * every request dies at `PI_AI_ERROR` before any upstream HTTP. Declaring pi-ai
+ * as a regular dependency would avoid that, but it also drags
+ * `@google/genai` and `protobufjs` into every profile, which makes pnpm raise
+ * its undecided-build-script prompt on install. The peer declaration is the
+ * deliberate trade; this module exists so the failure it risks reports *what*
+ * was loaded instead of that opaque crash.
  *
  * It is deliberately a warning, not a throw. The plugin is mid-load at this
  * point, and a hard failure here would take down a host that may still be able
@@ -85,8 +89,8 @@ export function piAiVersionWarning(resolved?: string | undefined): string | unde
   const version = arguments.length === 0 ? resolvedPiAiVersion() : resolved
   if (version === undefined || version === REQUIRED_PI_AI_VERSION) return undefined
   return `loaded @earendil-works/pi-ai ${version}, but this plugin is built for `
-    + `${REQUIRED_PI_AI_VERSION}. The wrong copy is being resolved — check the `
-    + 'profile\'s pi-ai install (a pnpm profile with nodeLinker "hoisted" and '
-    + `autoInstallPeers false can expose another package's older copy). Reinstalling the `
-    + `plugin so it installs its own ${REQUIRED_PI_AI_VERSION} copy resolves it`
+    + `${REQUIRED_PI_AI_VERSION}. pi-ai is a peer dependency, so the profile decides `
+    + 'which copy this plugin gets — check the profile\'s own pi-ai entry (a pnpm '
+    + 'profile with nodeLinker "hoisted" and autoInstallPeers false can expose '
+    + `another package's older copy). Pinning ${REQUIRED_PI_AI_VERSION} there resolves it`
 }

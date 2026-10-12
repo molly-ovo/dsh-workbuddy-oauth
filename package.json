@@ -2,7 +2,7 @@
   "name": "dsh-workbuddy-oauth",
   "displayName": "DSH WorkBuddy OAuth",
   "description": "把 WorkBuddy 模型接入 DeepSeek Harness —— 不依赖桌面 App，走 OAuth 设备码登录。",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "private": true,
   "type": "module",
   "engines": {
@@ -48,9 +48,6 @@
       "platform": "web"
     }
   },
-  "dependencies": {
-    "@earendil-works/pi-ai": "0.87.1"
-  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
     "@deepseek-ai/dsh-atomic-write": "^0.2.0-rc.2",
@@ -60,7 +57,8 @@
     "@deepseek-ai/dsh-llm": "^0.2.0-rc.2",
     "@deepseek-ai/dsh-llm-pi-ai": "^0.2.0-rc.2",
     "@deepseek-ai/dsh-settings": "^0.2.0-rc.2",
-    "@deepseek-ai/schemastery": "^3.18.2"
+    "@deepseek-ai/schemastery": "^3.18.2",
+    "@earendil-works/pi-ai": "^0.87.1"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.4",
