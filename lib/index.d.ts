@@ -739,8 +739,14 @@ declare class WorkBuddyUpstreamClient {
   /** Provenance of the most recent successful catalog fetch, for the card. */
   lastCatalog: WorkBuddyCatalogFetch | undefined;
   constructor(options?: WorkBuddyUpstreamClientOptions);
-  /** POST the chat endpoint; a successful answer is the raw SSE response. */
-  chatStream(credential: WorkBuddyCredential, bodyJson: string, signal?: AbortSignal): Promise<WorkBuddyChatResult>;
+  /**
+   * POST the chat endpoint; a successful answer is the raw SSE response.
+   *
+   * `sessionKey` names the conversation upstream (see
+   * {@link withGatewayChatHeaders}); the shim forwards the affinity header it
+   * already reads for account selection.
+   */
+  chatStream(credential: WorkBuddyCredential, bodyJson: string, signal?: AbortSignal, sessionKey?: string): Promise<WorkBuddyChatResult>;
   /** POST the token-refresh endpoint; the caller merges the outcome. */
   refreshToken(credential: WorkBuddyCredential): Promise<WorkBuddyRefreshOutcome>;
   /**
