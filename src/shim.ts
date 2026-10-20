@@ -247,7 +247,9 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
     // Session affinity: pi-ai forwards DSH's `sessionId` as `x-session-id`
     // (configured in adapter.ts). The store pins that conversation to one
     // account so a multi-turn exchange does not hop accounts mid-context.
-    // This header is internal (pi-ai → shim) and never forwarded upstream.
+    // The same header names the conversation upstream: WorkBuddy counts one
+    // user send as one request by `X-Conversation-Request-ID`, so without it
+    // a multi-step send is counted as many.
     const affinityHeader = req.headers['x-session-id']
     const sessionKey = typeof affinityHeader === 'string' && affinityHeader !== ''
       ? affinityHeader
@@ -266,7 +268,7 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
 
     const controller = new AbortController()
     req.on('close', () => controller.abort())
-    const result = await client.chatStream(credential, prepared, controller.signal)
+    const result = await client.chatStream(credential, prepared, controller.signal, sessionKey)
 
     // One line per request naming the serving account. This is the only
     // observable evidence of selection behaviour: alternating uids mean rotation,

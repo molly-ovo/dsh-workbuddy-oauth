@@ -22,6 +22,7 @@ import {
   type ChatIdentity,
   type IdentityConfig,
 } from './identity.ts'
+import { createHash, randomBytes } from 'node:crypto'
 import type { WorkBuddyCredential } from './credentials.ts'
 import { regionOfDomain, type WorkBuddyRegion } from './region.ts'
 import type { ProbeAttempt } from './probe.ts'
@@ -471,6 +472,237 @@ function refreshHeaders(credential: WorkBuddyCredential): Record<string, string>
   return headers
 }
 
+/**
+ * The `X-Agent-*` client-identity family.
+ *
+ * Measured 2026-10-20 against the live international gateway
+ * (`www.workbuddy.ai`): a chat carrying exactly the headers
+ * {@link chatHeaders} already sends is answered with HTTP 400 / business code
+ * `11128`, whose `displayMsg.zh` reads 「请求被拦截，请重新发送」 — which the
+ * user sees as a generic client error, because {@link classifyUpstreamError}
+ * funnels every 4xx without a credit or session marker into its `client`
+ * fallback. Adding this family turns the same request, same credential, into
+ * HTTP 200.
+ *
+ * The split inside the family is the point, not a detail:
+ *
+ * - `X-Agent-Intent` and `X-Agent-Purpose` are sent by WorkBuddy's own client
+ *   on **both** builds, so they go out on both regions here.
+ * - `X-Agent-Type: main` is **international-only** — that asymmetry is the
+ *   whole reason the CN endpoint serves the same body without complaint, and
+ *   sending it there would claim an identity that build does not have.
+ *
+ * The reference implementation (`magpie-community/plugins` workbuddy, `sign()`)
+ * does exactly this: it emits the shared pair unconditionally and returns
+ * early before `X-Agent-Type` unless the site is the international one.
+ *
+ * The values are literal constants, not configuration: they name the *kind*
+ * of client making the call, and a caller-chosen value would be a caller
+ * lying about its own purpose.
+ */
+export const SHARED_AGENT_HEADERS: Readonly<Record<string, string>> = {
+  'X-Agent-Intent': 'craft',
+  'X-Agent-Purpose': 'conversation',
+}
+
+/** International-only half of the family; see {@link SHARED_AGENT_HEADERS}. */
+export const INTERNATIONAL_AGENT_HEADERS: Readonly<Record<string, string>> = {
+  ...SHARED_AGENT_HEADERS,
+  'X-Agent-Type': 'main',
+}
+
+/**
+ * Salt for the conversation/turn id derivation, fresh in each process.
+ *
+ * WorkBuddy's own ids are one conversation's own within a run, and a derived
+ * id must not be readable as the text it came from — the same rule the
+ * reference implementation states. Per-process rather than per-account so a
+ * restart starts a new namespace, exactly as a fresh client would.
+ */
+const CONVERSATION_ID_SALT = randomBytes(16).toString('hex')
+
+/** The 32 hex digits WorkBuddy's own ids are made of. */
+function conversationIdHex(): string {
+  return randomBytes(16).toString('hex')
+}
+
+/**
+ * Derive one of WorkBuddy's 32-hex-digit ids from what names the thing it
+ * identifies, so every step of one send repeats the same value.
+ */
+function derivedConversationId(kind: string, key: string): string {
+  return createHash('sha256').update(`${CONVERSATION_ID_SALT}|${kind}|${key}`).digest('hex').slice(0, 32)
+}
+
+/**
+ * A message content's signature: its text, plus a digest of every part that
+ * is not text (an image, a file), so a turn of images alone is a turn of its
+ * own too.
+ *
+ * The "is this a tool result?" question is *not* answered here — that is
+ * {@link isToolResultOnly}'s job, and it has to be answered before this
+ * function is called. Answering it per-part would exclude a tool result that
+ * sits in the same message as the user's own words, which would key the turn
+ * on a prefix of what the user actually said.
+ */
+function messageSignature(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  let out = ''
+  for (const part of content) {
+    if (typeof part !== 'object' || part === null) continue
+    const record = part as Record<string, unknown>
+    const type = typeof record['type'] === 'string' ? record['type'] : ''
+    if (type === '' || type === 'text') {
+      out += typeof record['text'] === 'string' ? record['text'] : ''
+    } else {
+      out += `[${type}:${createHash('sha256').update(JSON.stringify(part)).digest('hex').slice(0, 8)}]`
+    }
+  }
+  return out
+}
+
+/**
+ * Whether `messages[i]` answers the message before it — a tool's result, or
+ * an assistant's calls — rather than carrying the user's own words.
+ */
+function answeredBefore(messages: unknown[], i: number): boolean {
+  const prev = messages[i - 1]
+  if (typeof prev !== 'object' || prev === null) return false
+  const record = prev as Record<string, unknown>
+  if (record['role'] === 'tool') return true
+  return record['role'] === 'assistant' && Array.isArray(record['tool_calls']) && record['tool_calls'].length > 0
+}
+
+/**
+ * Whether a message's content is nothing but tool results.
+ *
+ * Anthropic-shaped clients carry a tool result inside a *user* message, so a
+ * body can end with several such messages in a row while the send is still
+ * one. Those messages are not the user's own words, so a turn keyed on them
+ * would change with every step — the opposite of what a turn id is for.
+ *
+ * An *empty* text message is deliberately **not** covered here: it is
+ * genuinely ambiguous, and giving up (a per-request id) is the safe failure,
+ * whereas silently reusing an earlier turn would merge two distinct sends.
+ */
+function isToolResultOnly(content: unknown): boolean {
+  if (!Array.isArray(content) || content.length === 0) return false
+  for (const part of content) {
+    if (typeof part !== 'object' || part === null) return false
+    const type = (part as Record<string, unknown>)['type']
+    if (type !== 'tool_result' && type !== 'tool-result') return false
+  }
+  return true
+}
+
+/**
+ * Name the user send a chat answers: the body's last user message that is the
+ * user's own, by its place and its signature.
+ *
+ * Every step of one send (a tool call answered and sent again, a retry,
+ * another account answering) repeats it; the user's next message changes it.
+ * That is the whole point: WorkBuddy's backend counts one user send as one
+ * request by `X-Conversation-Request-ID`, so a chat carrying a fresh id every
+ * time is counted on its own and one send shows up in the usage detail as
+ * many requests.
+ *
+ * `''` when there is no signable user message, which tells the caller to make
+ * a per-request id — as before these were derived at all.
+ */
+function turnKeyOf(body: Record<string, unknown> | undefined): string {
+  const messages = Array.isArray(body?.['messages']) ? (body['messages'] as unknown[]) : []
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (typeof message !== 'object' || message === null) continue
+    const record = message as Record<string, unknown>
+    if (record['role'] !== 'user' || answeredBefore(messages, i)) continue
+    // Nothing but tool results: keep looking back for the user's own words.
+    if (isToolResultOnly(record['content'])) continue
+    const signature = messageSignature(record['content'])
+    return signature === '' ? '' : `u${i}:${signature}`
+  }
+  return ''
+}
+
+/**
+ * Name the conversation a chat belongs to, preferring an explicit session key
+ * over the chat's first user message.
+ *
+ * `''` names nothing — a body that is not a chat, or one with no user message
+ * in it — and no conversation id is sent then. A made-up one would be a
+ * conversation of the request's own, which is what fragments the usage detail
+ * in the first place.
+ *
+ * The session key is the harness's own affinity header, which the shim
+ * already reads for account selection (`x-session-id`); pi-ai forwards it
+ * through, so a request that arrived with one carries it here.
+ */
+function conversationKeyOf(body: Record<string, unknown> | undefined, sessionKey: string | undefined): string {
+  if (sessionKey !== undefined && sessionKey !== '') return `session:${sessionKey}`
+  const messages = Array.isArray(body?.['messages']) ? (body['messages'] as unknown[]) : []
+  for (const message of messages) {
+    if (typeof message !== 'object' || message === null) continue
+    const record = message as Record<string, unknown>
+    if (record['role'] !== 'user') continue
+    const signature = messageSignature(record['content'])
+    if (signature !== '') return `first:${signature}`
+  }
+  return ''
+}
+
+/**
+ * Attach the conversation-tracking header family to a chat request.
+ *
+ * The body is passed as the **prepared** JSON text (the value actually sent),
+ * never re-parsed from the request, so the ids name what went out on the wire
+ * rather than what the caller meant to send. A body that is not JSON yields
+ * no keys and only the per-request ids are attached — a chat whose shape
+ * cannot be read still has to be attributable.
+ *
+ * `X-Conversation-Message-ID` and `X-Request-ID` are one value, as WorkBuddy's
+ * own client has them. Every id already present on `headers` is kept — the
+ * caller's own attribution is better information than a derivation made here —
+ * so a request that arrives with its conversation named keeps that name.
+ *
+ * The `X-Agent-*` family is **not** set here: it is merged by the caller only
+ * for the international region, matching the reference implementation's
+ * `if (!site.ai) return` early exit. Keeping the two decisions apart is what
+ * lets a request be attributable without claiming to be an agent client.
+ */
+export function withGatewayChatHeaders(
+  headers: Record<string, string>,
+  preparedBody: string,
+  sessionKey?: string,
+): Record<string, string> {
+  let body: Record<string, unknown> | undefined
+  try {
+    const parsed: unknown = JSON.parse(preparedBody)
+    body = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined
+  } catch {
+    body = undefined
+  }
+  const conversation = conversationKeyOf(body, sessionKey)
+  const messageId = conversationIdHex()
+  // A caller-carried id is kept, for all four: the caller's own attribution
+  // is better information than a derivation this function made up. Only the
+  // ones it cannot already have are derived here.
+  if (headers['X-Conversation-Message-ID'] === undefined) headers['X-Conversation-Message-ID'] = messageId
+  if (headers['X-Request-ID'] === undefined) headers['X-Request-ID'] = headers['X-Conversation-Message-ID']
+  const turn = turnKeyOf(body)
+  if (headers['X-Conversation-Request-ID'] === undefined) {
+    headers['X-Conversation-Request-ID'] = turn === ''
+      ? conversationIdHex()
+      : derivedConversationId('turn', `${conversation}|${turn}`)
+  }
+  if (conversation !== '' && headers['X-Conversation-ID'] === undefined) {
+    headers['X-Conversation-ID'] = derivedConversationId('conversation', conversation)
+  }
+  return headers
+}
+
 /** Billing request headers. */
 function billingHeaders(credential: WorkBuddyCredential): Record<string, string> {
   const headers: Record<string, string> = {
@@ -677,13 +909,21 @@ export class WorkBuddyUpstreamClient {
       (async (region: WorkBuddyRegion): Promise<ChatIdentity> => resolveIdentity(region, this.identity))
   }
 
-  /** POST the chat endpoint; a successful answer is the raw SSE response. */
+  /**
+   * POST the chat endpoint; a successful answer is the raw SSE response.
+   *
+   * `sessionKey` names the conversation upstream (see
+   * {@link withGatewayChatHeaders}); the shim forwards the affinity header it
+   * already reads for account selection.
+   */
   async chatStream(
     credential: WorkBuddyCredential,
     bodyJson: string,
     signal?: AbortSignal,
+    sessionKey?: string,
   ): Promise<WorkBuddyChatResult> {
     const region = regionOf(credential.domain)
+    const international = region === 'global'
     // Identity resolution must never block a message: any failure — a thrown
     // resolver included — degrades to the desktop fallback form (built-in
     // version, no CLI segment), never to the legacy CLI UA.
@@ -696,12 +936,23 @@ export class WorkBuddyUpstreamClient {
       identity = fallbackChatIdentity(region)
       userAgent = chatUserAgent(identity, region)
     }
+    // Prepared once and used for both the wire and the id derivation, so the
+    // ids name what actually went out rather than what the caller meant.
+    const prepared = international ? prepareInternationalChatBody(bodyJson) : prepareCnChatBody(bodyJson)
+    const headers: Record<string, string> = {
+      ...chatHeaders(credential, userAgent, identity.clientVersion),
+      'Authorization': `Bearer ${credential.accessToken}`,
+    }
+    withGatewayChatHeaders(headers, prepared, sessionKey)
+    // The identity family is what the gate reads; see SHARED_AGENT_HEADERS for
+    // the measurement behind it, and why only X-Agent-Type is region-scoped.
+    Object.assign(headers, international ? INTERNATIONAL_AGENT_HEADERS : SHARED_AGENT_HEADERS)
     let response: Response
     try {
       response = await fetch(`${chatBase(credential)}/v2/chat/completions`, {
         method: 'POST',
-        headers: { ...chatHeaders(credential, userAgent, identity.clientVersion), 'Authorization': `Bearer ${credential.accessToken}` },
-        body: region === 'global' ? prepareInternationalChatBody(bodyJson) : prepareCnChatBody(bodyJson),
+        headers,
+        body: prepared,
         ...signal === undefined ? {} : { signal },
       })
     } catch (error: unknown) {
@@ -1080,12 +1331,24 @@ export class WorkBuddyUpstreamClient {
     }
     if (effort !== undefined) payload['reasoning_effort'] = effort
 
+    // The probe shares the chat path's gateway headers on purpose: a probe
+    // that passes while a real message would be refused measures nothing.
+    // It carries no session key, so its conversation id derives from the
+    // probe's own first user message — a probe is its own conversation.
+    const probeBody = JSON.stringify(payload)
+    const headers: Record<string, string> = {
+      ...chatHeaders(credential, userAgent, identity.clientVersion),
+      'Authorization': `Bearer ${credential.accessToken}`,
+    }
+    withGatewayChatHeaders(headers, probeBody)
+    Object.assign(headers, international ? INTERNATIONAL_AGENT_HEADERS : SHARED_AGENT_HEADERS)
+
     let response: Response
     try {
       response = await fetch(`${chatBase(credential)}/v2/chat/completions`, {
         method: 'POST',
-        headers: { ...chatHeaders(credential, userAgent, identity.clientVersion), 'Authorization': `Bearer ${credential.accessToken}` },
-        body: JSON.stringify(payload),
+        headers,
+        body: probeBody,
         signal,
       })
     } catch (error: unknown) {
