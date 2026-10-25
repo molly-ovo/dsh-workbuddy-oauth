@@ -13,7 +13,7 @@
  * @module dsh-workbuddy-oauth/upstream
  */
 
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 
 import {
   appUserAgent,
@@ -451,12 +451,74 @@ function commonHeaders(credential: WorkBuddyCredential): Record<string, string> 
  * concurrent requests off one shared conversation. Chat and probe both build
  * their headers through {@link chatHeaders}, so both carry it.
  */
-function conversationHeaders(): Record<string, string> {
+export function conversationHeaders(newId: () => string = uuidV4): Record<string, string> {
   return {
-    'X-Conversation-ID': randomUUID(),
-    'X-Conversation-Request-ID': randomUUID(),
-    'X-Conversation-Message-ID': randomUUID(),
+    'X-Conversation-ID': newId(),
+    'X-Conversation-Request-ID': newId(),
+    'X-Conversation-Message-ID': newId(),
   }
+}
+
+/**
+ * A fresh RFC 4122 version-4 UUID.
+ *
+ * Uses `crypto.randomUUID` when the runtime provides it and falls back to a v4
+ * id assembled from `crypto.randomBytes` otherwise (or if it throws), so the
+ * trio can never be skipped for want of a UUID helper. `impl` exists for tests.
+ */
+export function uuidV4(impl: (() => string) | undefined = typeof randomUUID === 'function' ? randomUUID : undefined): string {
+  if (impl !== undefined) {
+    try {
+      const id = impl()
+      if (typeof id === 'string' && id.length === 36) return id
+    } catch {
+      // fall through to the randomBytes form
+    }
+  }
+  const b = randomBytes(16)
+  b[6] = (b[6]! & 0x0f) | 0x40
+  b[8] = (b[8]! & 0x3f) | 0x80
+  const h = b.toString('hex')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+
+/**
+ * Whether an upstream error body is the gateway's conversation-header
+ * rejection (HTTP 400, `code` 11128, 「请求被拦截,请重新发送」).
+ */
+export function isConversationRejection(status: number, body: string): boolean {
+  if (status !== 400) return false
+  return /(^|[^0-9])11128([^0-9]|$)/.test(body) || body.includes('请求被拦截')
+}
+
+/**
+ * POST `/v2/chat/completions` — the single sender for chat and probe.
+ *
+ * Headers are built per attempt (so every request, including the retry, gets
+ * a fresh conversation trio; nothing is cached per module, process, or
+ * session). If the gateway answers 400 / 11128 the request is sent once more
+ * with a newly generated trio; any other answer, and a second 11128, is
+ * returned to the caller unchanged. Transport errors propagate as thrown.
+ */
+async function postChatCompletions(
+  credential: WorkBuddyCredential,
+  userAgent: string,
+  clientVersion: string,
+  body: string,
+  signal: AbortSignal | undefined,
+): Promise<Response> {
+  const send = (): Promise<Response> =>
+    fetch(`${chatBase(credential)}/v2/chat/completions`, {
+      method: 'POST',
+      headers: { ...chatHeaders(credential, userAgent, clientVersion), 'Authorization': `Bearer ${credential.accessToken}` },
+      body,
+      ...signal === undefined ? {} : { signal },
+    })
+  const first = await send()
+  if (first.status !== 400 || signal?.aborted === true) return first
+  const peek = (await first.clone().text()).slice(0, ERROR_BODY_LIMIT)
+  if (!isConversationRejection(first.status, peek)) return first
+  return send()
 }
 
 /**
@@ -728,12 +790,13 @@ export class WorkBuddyUpstreamClient {
     }
     let response: Response
     try {
-      response = await fetch(`${chatBase(credential)}/v2/chat/completions`, {
-        method: 'POST',
-        headers: { ...chatHeaders(credential, userAgent, identity.clientVersion), 'Authorization': `Bearer ${credential.accessToken}` },
-        body: region === 'global' ? prepareInternationalChatBody(bodyJson) : prepareCnChatBody(bodyJson),
-        ...signal === undefined ? {} : { signal },
-      })
+      response = await postChatCompletions(
+        credential,
+        userAgent,
+        identity.clientVersion,
+        region === 'global' ? prepareInternationalChatBody(bodyJson) : prepareCnChatBody(bodyJson),
+        signal,
+      )
     } catch (error: unknown) {
       return { ok: false, status: 0, kind: 'server', message: `transport error: ${String(error)}` }
     }
@@ -1112,12 +1175,7 @@ export class WorkBuddyUpstreamClient {
 
     let response: Response
     try {
-      response = await fetch(`${chatBase(credential)}/v2/chat/completions`, {
-        method: 'POST',
-        headers: { ...chatHeaders(credential, userAgent, identity.clientVersion), 'Authorization': `Bearer ${credential.accessToken}` },
-        body: JSON.stringify(payload),
-        signal,
-      })
+      response = await postChatCompletions(credential, userAgent, identity.clientVersion, JSON.stringify(payload), signal)
     } catch (error: unknown) {
       return { status: 0, streamed: false, detail: `transport error: ${String(error)}` }
     }
