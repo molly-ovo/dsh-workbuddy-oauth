@@ -232,6 +232,74 @@ describe('failure paths', () => {
   })
 })
 
+describe('forced refresh after the upstream rejected the access token', () => {
+  it('refreshes even when the stored expiry is still in the future', async () => {
+    // The shape of a revoked session: the token looks fine by its own
+    // `expiresAtMs`, so an expiry-gated refresh would skip it and re-serve the
+    // very token the upstream just refused.
+    await writeCredential(stored())
+    const fetchImpl = vi.fn(async () => refreshResponse())
+
+    const outcome = await refreshCredential('uid-1', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      force: true,
+      staleAccessToken: 'old-access',
+    })
+
+    expect(outcome.status).toBe('refreshed')
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('skips the network when another caller already replaced the token', async () => {
+    // Two requests hit the same 401. The first refreshes; the second must not
+    // spend a second rotation just to learn the same thing.
+    await writeCredential(stored({ accessToken: 'already-new' }))
+    const fetchImpl = vi.fn(async () => refreshResponse())
+
+    const outcome = await refreshCredential('uid-1', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      force: true,
+      staleAccessToken: 'old-access',
+    })
+
+    expect(outcome.status).toBe('not-needed')
+    if (outcome.status === 'not-needed') expect(outcome.credential.accessToken).toBe('already-new')
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('marks a 401 from the refresh endpoint as permanent', async () => {
+    await writeCredential(stored())
+    const fetchImpl = vi.fn(async () => new Response(
+      JSON.stringify({ code: 12153, msg: '12153:invalid_grant: Refresh token issued before the user session started' }),
+      { status: 401, headers: { 'content-type': 'application/json' } },
+    ))
+
+    const outcome = await refreshCredential('uid-1', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      force: true,
+      staleAccessToken: 'old-access',
+    })
+
+    expect(outcome.status).toBe('failed')
+    // Only a permanent failure may park the account; "try again later" must not.
+    if (outcome.status === 'failed') expect(outcome.permanent).toBe(true)
+  })
+
+  it('does not mark a transport failure as permanent', async () => {
+    await writeCredential(stored())
+    const fetchImpl = vi.fn(async () => { throw new Error('ETIMEDOUT') })
+
+    const outcome = await refreshCredential('uid-1', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      force: true,
+      staleAccessToken: 'old-access',
+    })
+
+    expect(outcome.status).toBe('failed')
+    if (outcome.status === 'failed') expect(outcome.permanent).toBeUndefined()
+  })
+})
+
 describe('credentialFromLogin integration', () => {
   it('produces a credential that a refresh can then update', async () => {
     const credential = credentialFromLogin({

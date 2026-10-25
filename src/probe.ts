@@ -95,16 +95,29 @@ export type ProbeRegion = 'cn' | 'global'
  *
  * A generic code is readable here only because the baseline step has already
  * proved the *same* request without `reasoning_effort` succeeds, leaving the
- * sentinel as the only difference between the two attempts. That is also why it
- * is *not* added to `cn`: that endpoint was measured answering the specific
- * code, and accepting a generic one there would attribute beyond what was seen.
+ * sentinel as the only difference between the two attempts. Both endpoints used
+ * to answer with a *specific* code and now answer with a generic one, so that
+ * baseline check is load-bearing rather than defensive.
  *
  * Neither is a permanent protocol promise: anything unrecognized still degrades
  * to `unknown` rather than to a capability conclusion.
  */
 const INVALID_EFFORT_CODES: Record<ProbeRegion, ReadonlySet<string>> = {
-  cn: new Set(['invalid_reasoning_effort']),
-  global: new Set(['invalid_reasoning_effort', 'model_param_invalid']),
+  // Both endpoints were re-measured on 2026-10-25 (deepseek-v4.1-flash): a
+  // request without `reasoning_effort` streams 200, and the same request with
+  // `reasoning_effort: "bogus"` answers HTTP 400 / code 11133 with an *empty*
+  // `extError.param` and `extError.code: "invalid_request_error"` — so the
+  // concrete spelling both endpoints used before is gone, replaced by a generic
+  // one. `invalid_parameter_value` is the spelling the upstream project recorded
+  // on the same change. The older specific codes stay listed: they cost nothing
+  // and a model can still answer with them.
+  cn: new Set(['invalid_reasoning_effort', 'invalid_request_error', 'invalid_parameter_value']),
+  global: new Set([
+    'invalid_reasoning_effort',
+    'model_param_invalid',
+    'invalid_request_error',
+    'invalid_parameter_value',
+  ]),
 }
 
 /** Whether an attempt is an attributable rejection of the effort value. */

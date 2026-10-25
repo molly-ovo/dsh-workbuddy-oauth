@@ -13,6 +13,7 @@
  * @module dsh-workbuddy-oauth/upstream
  */
 
+import { randomUUID } from 'node:crypto'
 import {
   appUserAgent,
   chatUserAgent,
@@ -433,6 +434,29 @@ function commonHeaders(credential: WorkBuddyCredential): Record<string, string> 
 }
 
 /**
+ * The conversation-channel trio the chat endpoint requires.
+ *
+ * Since 2026-10-16 the gateway answers a chat request that omits all three with
+ * `400` / `code 11128` / `msg: "conversation id missing"`. The official desktop
+ * client sends the trio on chat and speech alike, and the CN gateway was
+ * measured accepting it with and without — so both regions carry it and the two
+ * paths cannot drift.
+ *
+ * A fresh UUID per request is enough: the upstream keeps no history keyed by
+ * the id (measured by the upstream project — two calls sharing one id, the
+ * second carrying only `system` + `user`, still answered "I don't know"), so the
+ * trio marks the channel rather than carrying conversation state. Fresh ids also
+ * keep concurrent sub-agents off one shared conversation.
+ */
+function conversationHeaders(): Record<string, string> {
+  return {
+    'X-Conversation-ID': randomUUID(),
+    'X-Conversation-Request-ID': randomUUID(),
+    'X-Conversation-Message-ID': randomUUID(),
+  }
+}
+
+/**
  * Chat request headers, including the X-No-* conventions the official CLI uses.
  *
  * `userAgent` and `clientVersion` carry the same resolved desktop identity for
@@ -454,6 +478,7 @@ function chatHeaders(credential: WorkBuddyCredential, userAgent: string, clientV
     'X-IDE-Name': 'WorkBuddy',
     'X-IDE-Version': clientVersion,
     'X-Product': 'SaaS',
+    ...conversationHeaders(),
   }
   return headers
 }

@@ -22,6 +22,7 @@ import type { CredentialStore as WorkBuddyCredentialStore } from './store.ts'
 import type { WorkBuddyCatalog } from './catalog.ts'
 import { hostIsLoopback, originIsLoopback } from './loopback.ts'
 import { extractDisplayErrorMessage, prepareChatBody, WorkBuddyUpstreamClient, type UpstreamErrorKind } from './upstream.ts'
+import { refreshCredential } from './refresh.ts'
 
 /**
  * How long an upstream failure parks an account out of selection.
@@ -55,6 +56,24 @@ export function cooldownForKind(kind: UpstreamErrorKind, now: number = Date.now(
     ? FAILURE_COOLDOWN_MS[kind]
     : undefined
   return ms === undefined ? undefined : now + ms
+}
+
+/**
+ * How long an account whose *session* the upstream has revoked stays parked.
+ *
+ * `cooldownForKind` never parks `session_dead`, because a request-shaped 401
+ * could be a transient hiccup. But when the refresh token is refused as well,
+ * the account really cannot serve anything until the user signs in again — and
+ * leaving it in rotation means every message retries a dead session before
+ * rotating. Parking it briefly lets a multi-account pool fail over on the *same*
+ * message instead of the next one; the user's re-login clears it (see
+ * {@link clearCooldown} in the sign-in path).
+ */
+export const SESSION_DEAD_PARK_MS = 5 * 60_000
+
+/** Whether a response body is the gateway's HTML page rather than JSON. */
+function isHtmlBody(text: string): boolean {
+  return text.trimStart().startsWith('<')
 }
 
 /**
@@ -266,7 +285,38 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
 
     const controller = new AbortController()
     req.on('close', () => controller.abort())
-    const result = await client.chatStream(credential, prepared, controller.signal)
+    let result = await client.chatStream(credential, prepared, controller.signal)
+
+    /**
+     * Recover from a rejected access token.
+     *
+     * The upstream retires a session's tokens when the same account signs in
+     * elsewhere, but the stored access token keeps its future `expiresAtMs` —
+     * so the lazy refresh in the store never fires and every request would keep
+     * presenting a dead token until its nominal expiry (days later).
+     *
+     * A 401 arrives before any of the stream does, so re-sending the same body
+     * is safe here in a way a mid-stream retry never would be: nothing has been
+     * delivered, and the only thing that changed is the credential. One attempt
+     * only — if a fresh token is rejected too, the cause is not the credential.
+     */
+    if (!result.ok && result.status === 401 && credential.refreshToken !== '') {
+      const outcome = await refreshCredential(credential.uid, {
+        force: true,
+        staleAccessToken: credential.accessToken,
+      })
+      if (outcome.status === 'failed') {
+        logger?.warn(`dsh-workbuddy-oauth: refresh failed for uid=${credential.uid.slice(0, 8)}: ${outcome.reason}`)
+        if (outcome.permanent === true) {
+          // Signing in again is the only fix; park the account so the rest of
+          // the pool can serve instead of retrying a dead session each turn.
+          store.noteFailure(credential.uid, Date.now() + SESSION_DEAD_PARK_MS)
+        }
+      } else {
+        credential = outcome.credential
+        result = await client.chatStream(credential, prepared, controller.signal)
+      }
+    }
 
     // One line per request naming the serving account. This is the only
     // observable evidence of selection behaviour: alternating uids mean rotation,
@@ -290,7 +340,14 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
       const until = cooldownForKind(result.kind)
       if (until !== undefined) store.noteFailure(credential.uid, until)
 
-      const detail = extractDisplayErrorMessage(result.message) ?? result.message.slice(0, 400)
+      const detail = extractDisplayErrorMessage(result.message)
+        // A gateway 401 has no JSON envelope to read a message out of — the body
+        // is the APISIX HTML page. Passing that through surfaced in the UI as
+        // the host's generic "invalid API key" banner, which names the symptom
+        // and not the action; say what to do instead.
+        ?? (result.kind === 'session_dead' && isHtmlBody(result.message)
+          ? '登录会话已被上游作废（账号可能在别处重新登录过），请重新执行 /wb-login 完成登录。'
+          : result.message.slice(0, 400))
       // The host adapter classifies any error text containing a bare
       // `401`/`403` word as AUTH, which would mask business errors (safety
       // review, illegal request) behind an "invalid API key" banner. Only

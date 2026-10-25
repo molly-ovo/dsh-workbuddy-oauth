@@ -561,6 +561,11 @@ export function apply(ctx: Context, config: Config): void {
     // returns it *still* disabled: the credential is stored, nothing selects it,
     // and every surface reports it as disabled with no way to tell why.
     await forgetAccount(credential.uid)
+    // A fresh sign-in is also a fresh *session*, so a cooldown parked by the
+    // previous one is stale — including the park the shim applies when the
+    // upstream revokes a session, which is exactly the case a user fixes by
+    // signing in again.
+    await Promise.all(runtimes.map((runtime) => runtime.store.clearFailure(credential.uid)))
     // Refresh immediately so the models are selectable without waiting for the
     // periodic poll.
     await Promise.all(runtimes.map((runtime) => refreshCatalog(ctx, runtime, log, 'login')))

@@ -71,6 +71,9 @@ settings.yml
 .workbuddy-probe.json
 .dsh/
 
+# 本工作区的临时探针与凭据备份（probe-*.mjs、bak/*.json 里可能含真实令牌）
+.workbuddy/
+
 # 本地手工备份 / 草稿（如 README.bak.md）
 README.bak.md
 README.old.md

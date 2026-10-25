@@ -36,7 +36,7 @@ import {
   type WorkBuddyCredential,
 } from './credentials.ts'
 import { disabledUids } from './account-state.ts'
-import { readCooldowns, writeCooldown } from './cooldown-state.ts'
+import { readCooldowns, writeCooldown, clearCooldown } from './cooldown-state.ts'
 import type { WorkBuddyRegion } from './region.ts'
 import { refreshCredential, needsRefresh } from './refresh.ts'
 
@@ -69,6 +69,16 @@ export interface CredentialStore {
    * the deadline and hands it over.
    */
   noteFailure(uid: string, untilMs: number): void
+  /**
+   * Drop `uid`'s cooldown, in memory and on disk.
+   *
+   * Called after a successful sign-in: a fresh credential is a different
+   * session, so a park recorded for the old one (for example a revoked session
+   * that needed re-login) no longer describes it. Without this the account
+   * stays out of selection for the rest of the park even though the user just
+   * fixed it by signing in.
+   */
+  clearFailure(uid: string): Promise<void>
 }
 
 /** How long a conversation keeps its pinned account without a request. */
@@ -270,6 +280,11 @@ export function createCredentialStore(options: CredentialStoreOptions = {}): Cre
       // tracked in `pendingWrites` (see ./cooldown-state.ts) so tests can await
       // it deterministically instead of sleeping; in production nothing waits.
       void writeCooldown(uid, untilMs, now()).catch(() => {})
+    },
+
+    async clearFailure(uid: string): Promise<void> {
+      cooldownUntilMs.delete(uid)
+      await clearCooldown(uid, now()).catch(() => false)
     },
   }
 }

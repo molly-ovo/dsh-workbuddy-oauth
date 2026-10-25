@@ -44,6 +44,7 @@ function makeService(options: {
     current: async () => ({ accessToken: 't', refreshToken: 'r', expiresAtMs: Date.now() + 60_000, domain: 'workbuddy.ai', uid: 'uid-1', region: 'cn' }),
     resolve: async () => { throw new Error('unused') },
     noteFailure: () => {},
+    clearFailure: async () => {},
   }
   const client = {} as WorkBuddyUpstreamClient
   return new WorkBuddyProbeService({

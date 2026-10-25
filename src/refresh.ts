@@ -57,13 +57,38 @@ const REFRESH_USER_AGENT = 'CLI/2.63.2 CodeBuddy/2.63.2'
 export type RefreshOutcome =
   | { status: 'refreshed'; credential: WorkBuddyCredential }
   | { status: 'not-needed'; credential: WorkBuddyCredential }
-  | { status: 'failed'; reason: string }
+  | {
+    status: 'failed'
+    reason: string
+    /**
+     * The upstream rejected the refresh token itself (`401`), as opposed to a
+     * network or server hiccup. Nothing but signing in again can fix that, so
+     * callers use this to tell "try later" from "this account is dead".
+     */
+    permanent?: boolean
+  }
 
 /** Injectable collaborators, so the logic is testable without a network. */
 export interface RefreshDeps {
   fetchImpl?: typeof fetch
   now?: () => number
   timeoutMs?: number
+  /**
+   * Refresh even when the stored token is not near expiry.
+   *
+   * Set when the upstream already rejected the access token: a revoked session
+   * keeps its old `expiresAtMs`, so the expiry check would otherwise report
+   * "not needed" and hand back the very token that just failed.
+   */
+  force?: boolean
+  /**
+   * The access token that was rejected, used with {@link force}.
+   *
+   * If the stored token already differs, another process or an earlier request
+   * refreshed in the meantime — return that one instead of spending another
+   * refresh token on a rotation the upstream counts.
+   */
+  staleAccessToken?: string
 }
 
 /** Headers the refresh endpoint expects. */
@@ -170,11 +195,17 @@ export async function refreshCredential(uid: string, deps: RefreshDeps = {}): Pr
         return { status: 'failed', reason: '账号凭据不存在或已损坏，请重新登录。' } as const
       }
       const now = (deps.now ?? Date.now)()
-      if (!needsRefresh(stored, now)) {
+      if (deps.force === true && deps.staleAccessToken !== undefined
+        && stored.accessToken !== deps.staleAccessToken) {
+        // Another request already replaced the rejected token; hand that back
+        // rather than rotating a second time.
+        return { status: 'not-needed', credential: stored } as const
+      }
+      if (deps.force !== true && !needsRefresh(stored, now)) {
         return { status: 'not-needed', credential: stored } as const
       }
       if (stored.refreshToken === '') {
-        return { status: 'failed', reason: '没有 refresh token，需要重新登录。' } as const
+        return { status: 'failed', reason: '没有 refresh token，需要重新登录。', permanent: true } as const
       }
 
       const fetchImpl = deps.fetchImpl ?? fetch
@@ -208,7 +239,16 @@ export async function refreshCredential(uid: string, deps: RefreshDeps = {}): Pr
           typeof payload === 'object' && payload !== null && 'msg' in payload
             ? String((payload as Record<string, unknown>)['msg'])
             : `HTTP ${response.status}`
-        return { status: 'failed', reason: `刷新未返回新 token：${message}` } as const
+        // A 401 here is the refresh token being refused (`invalid_grant`,
+        // `12153:refresh token failed`), with one measured shape worth naming:
+        // 「Refresh token issued before the user session started」 — the account
+        // signed in somewhere else afterwards, which retires this session's
+        // tokens while the stored access token keeps a future `expiresAtMs`.
+        return {
+          status: 'failed',
+          reason: `刷新未返回新 token：${message}`,
+          permanent: response.status === 401,
+        } as const
       }
 
       const refreshed: WorkBuddyCredential = {

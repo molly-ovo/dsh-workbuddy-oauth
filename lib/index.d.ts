@@ -344,12 +344,34 @@ type RefreshOutcome = {
 } | {
   status: 'failed';
   reason: string;
+  /**
+   * The upstream rejected the refresh token itself (`401`), as opposed to a
+   * network or server hiccup. Nothing but signing in again can fix that, so
+   * callers use this to tell "try later" from "this account is dead".
+   */
+  permanent?: boolean;
 };
 /** Injectable collaborators, so the logic is testable without a network. */
 interface RefreshDeps {
   fetchImpl?: typeof fetch;
   now?: () => number;
   timeoutMs?: number;
+  /**
+   * Refresh even when the stored token is not near expiry.
+   *
+   * Set when the upstream already rejected the access token: a revoked session
+   * keeps its old `expiresAtMs`, so the expiry check would otherwise report
+   * "not needed" and hand back the very token that just failed.
+   */
+  force?: boolean;
+  /**
+   * The access token that was rejected, used with {@link force}.
+   *
+   * If the stored token already differs, another process or an earlier request
+   * refreshed in the meantime — return that one instead of spending another
+   * refresh token on a rotation the upstream counts.
+   */
+  staleAccessToken?: string;
 }
 /**
  * Refresh one account's token if needed.
@@ -389,6 +411,16 @@ interface CredentialStore {
    * the deadline and hands it over.
    */
   noteFailure(uid: string, untilMs: number): void;
+  /**
+   * Drop `uid`'s cooldown, in memory and on disk.
+   *
+   * Called after a successful sign-in: a fresh credential is a different
+   * session, so a park recorded for the old one (for example a revoked session
+   * that needed re-login) no longer describes it. Without this the account
+   * stays out of selection for the rest of the park even though the user just
+   * fixed it by signing in.
+   */
+  clearFailure(uid: string): Promise<void>;
 }
 /**
  * Rotating selection: pick the next ready account in ring order.

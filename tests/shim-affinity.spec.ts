@@ -40,6 +40,7 @@ function recordingStore(): CredentialStore & {
     },
     async current() { return CREDENTIAL },
     noteFailure(uid, untilMs) { failures.push({ uid, untilMs }) },
+    async clearFailure() {},
   }
 }
 
