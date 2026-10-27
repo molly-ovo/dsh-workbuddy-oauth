@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest'
 import { cooldownForKind, FAILURE_COOLDOWN_MS } from '../src/shim.ts'
 describe('cooldownForKind', () => {
   it('cools account-shaped failures', () => {
-    for (const kind of ['hard_credit', 'soft_rate', 'server'] as const) {
+    for (const kind of ['hard_credit', 'soft_rate', 'account_restricted', 'server'] as const) {
       expect(cooldownForKind(kind, 1000)).toBe(1000 + FAILURE_COOLDOWN_MS[kind])
     }
   })
@@ -38,6 +38,13 @@ describe('cooldownForKind', () => {
     // durations must differ by an order of magnitude because the causes do.
     expect(FAILURE_COOLDOWN_MS.hard_credit).toBe(60 * 60_000)
     expect(FAILURE_COOLDOWN_MS.hard_credit).toBeGreaterThan(FAILURE_COOLDOWN_MS.soft_rate * 10)
+  })
+
+  it('parks a restricted account for half an hour', () => {
+    // A restriction (403 / code 11140) does not clear within a minute, so a
+    // short park would put the account straight back into rotation; half an
+    // hour keeps it out of the way without hiding a recovery for long.
+    expect(FAILURE_COOLDOWN_MS.account_restricted).toBe(30 * 60_000)
   })
 
   it('keeps a rate limit short, since it clears on its own', () => {

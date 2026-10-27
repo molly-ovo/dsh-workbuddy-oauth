@@ -57,4 +57,43 @@ describe('classifyUpstreamError', () => {
     expect(classifyUpstreamError(500, '{}')).toBe('server')
     expect(classifyUpstreamError(400, '{"code":11101,"msg":"bad json"}')).toBe('client')
   })
+
+  describe('account restriction', () => {
+    // Measured 2026-10-28: a flagged account answers every chat with HTTP 403 /
+    // code 11140 while a second account answers 200 to the identical request. As
+    // `client` it was never cooled, so the pool kept choosing the restricted
+    // account and every turn failed with a perfectly usable account idle.
+    const RESTRICTED_BODY = '{"code":11140,"msg":"request illegal",'
+      + '"requestId":"00000000-0000-4000-8000-000000000000",'
+      + '"displayMsg":{"en":"Your account has been restricted due to unusual activity",'
+      + '"zh":"账号存在异常行为，已被限制使用"}}'
+
+    it('classifies the measured 403 restriction as account_restricted', () => {
+      expect(classifyUpstreamError(403, RESTRICTED_BODY)).toBe('account_restricted')
+    })
+
+    it('recognizes the wording on its own, in either language', () => {
+      expect(classifyUpstreamError(403, '{"displayMsg":{"en":"Your account has been restricted due to unusual activity"}}'))
+        .toBe('account_restricted')
+      expect(classifyUpstreamError(403, '{"displayMsg":{"zh":"账号存在异常行为，已被限制使用"}}'))
+        .toBe('account_restricted')
+      expect(classifyUpstreamError(403, '{"displayMsg":{"zh-hant":"帳號存在異常行為，已被限制使用"}}'))
+        .toBe('account_restricted')
+    })
+
+    it('recognizes the business code with and without a space', () => {
+      expect(classifyUpstreamError(403, '{"code":11140}')).toBe('account_restricted')
+      expect(classifyUpstreamError(403, '{"code": 11140}')).toBe('account_restricted')
+    })
+
+    it('does not fire on the unrelated request-illegal code 11128', () => {
+      // 11128 means the request *shape* is wrong and would fail on every
+      // account, so it must stay in the never-cooled `client` class.
+      expect(classifyUpstreamError(400, '{"code":11128,"msg":"Illegal API invocation"}')).toBe('client')
+    })
+
+    it('does not fire on a bare 403 with no markers', () => {
+      expect(classifyUpstreamError(403, '{"msg":"forbidden"}')).toBe('client')
+    })
+  })
 })

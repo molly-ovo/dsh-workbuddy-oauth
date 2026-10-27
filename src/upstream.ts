@@ -33,6 +33,7 @@ export type { WorkBuddyRegion }
 export type UpstreamErrorKind =
   | 'hard_credit'
   | 'soft_rate'
+  | 'account_restricted'
   | 'session_dead'
   | 'not_found'
   | 'server'
@@ -334,6 +335,37 @@ function resolveUpstreamBilling(
 const SESSION_DEAD_MARKERS: readonly string[] = ['Offline user session not found', '12153']
 
 /**
+ * Markers for an account the upstream has restricted for unusual activity.
+ *
+ * Measured 2026-10-28 on the international gateway: one account answers every
+ * chat with **HTTP 403**, `{"code":11140,"msg":"request illegal","displayMsg":
+ * {"en":"Your account has been restricted due to unusual activity", …}}`, while
+ * a second account on the same device and the same request shape answers 200.
+ *
+ * The 403 alone cannot say this: without these markers it fell through to
+ * `client`, the class the shim deliberately never cools — "a request-shape
+ * problem that would fail identically on any account". A restriction is the
+ * one 403 that is *not* account-independent, so every request kept being sent
+ * to the restricted account (session affinity, no cooldown) and every turn
+ * failed while a perfectly usable account sat idle.
+ */
+const ACCOUNT_RESTRICTED_MARKERS: readonly string[] = [
+  '账号存在异常行为', '帳號存在異常行為', '账号存在異常行為',
+  'restricted due to unusual activity', 'has been restricted',
+]
+
+/**
+ * Business code for the restriction above.
+ *
+ * Matched in its quoted JSON form (`"code":11140`) rather than as a bare
+ * substring: `14018` can afford a bare match because five digits of a numbers
+ * field rarely collide, but a restriction body also carries a 32-hex-character
+ * `requestId`, and a bare match would occasionally hit a hex digit run inside
+ * it and park a healthy account.
+ */
+const ACCOUNT_RESTRICTED_CODES: readonly string[] = ['"code":11140', '"code": 11140']
+
+/**
  * Classify an upstream failure from its HTTP status and body excerpt.
  *
  * **Credit is checked before the status-code fallbacks, deliberately.** The
@@ -342,6 +374,10 @@ const SESSION_DEAD_MARKERS: readonly string[] = ['Offline user session not found
  * pays, while "slow down" clears on its own. Treating the former as the latter
  * makes the pool retry a dead account forever. The body markers are therefore
  * consulted for every status, not only after 402.
+ *
+ * The same reasoning puts an account *restriction* ahead of the 403 fallback:
+ * it is an account-level condition that only another account can serve, so it
+ * must never be answered as the account-independent `client` class.
  */
 export function classifyUpstreamError(status: number, body: string): UpstreamErrorKind {
   if (status === 402) return 'hard_credit'
@@ -360,6 +396,12 @@ export function classifyUpstreamError(status: number, body: string): UpstreamErr
   }
   for (const marker of SESSION_DEAD_MARKERS) {
     if (body.includes(marker)) return 'session_dead'
+  }
+  for (const marker of ACCOUNT_RESTRICTED_MARKERS) {
+    if (lower.includes(marker.toLowerCase()) || body.includes(marker)) return 'account_restricted'
+  }
+  for (const code of ACCOUNT_RESTRICTED_CODES) {
+    if (body.includes(code)) return 'account_restricted'
   }
   if (status === 429) return 'soft_rate'
   if (status === 404) return 'not_found'

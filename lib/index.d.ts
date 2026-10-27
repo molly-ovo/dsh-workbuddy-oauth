@@ -573,7 +573,7 @@ declare function probeModel(options: {
 //#endregion
 //#region src/upstream.d.ts
 /** Upstream failure classes the shim maps onto distinct HTTP answers. */
-type UpstreamErrorKind = 'hard_credit' | 'soft_rate' | 'session_dead' | 'not_found' | 'server' | 'client';
+type UpstreamErrorKind = 'hard_credit' | 'soft_rate' | 'account_restricted' | 'session_dead' | 'not_found' | 'server' | 'client';
 /** One CLI-usable model as the upstream catalog describes it. */
 interface WorkBuddyUpstreamModel {
   id: string;

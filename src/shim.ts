@@ -36,12 +36,19 @@ import { extractDisplayErrorMessage, prepareChatBody, WorkBuddyUpstreamClient, t
  *   the user can also re-enable or sign in again explicitly.
  * - `soft_rate` means "too fast": the upstream's own limit resets on its own, so
  *   a short park is enough to stop the next request from hitting the same wall.
+ * - `account_restricted` means the upstream flagged the account for unusual
+ *   activity (403/11140). It does not clear on its own in a minute — measured, a
+ *   flagged account stayed refused for over a day while a second account worked —
+ *   but half an hour is enough to stop burning every request on it without
+ *   hiding a recovery for long. The in-request retry below is what keeps a turn
+ *   alive in the meantime.
  *
  * `server` (5xx) is transient by nature, hence the shortest.
  */
-export const FAILURE_COOLDOWN_MS: Readonly<Record<'hard_credit' | 'soft_rate' | 'server', number>> = {
+export const FAILURE_COOLDOWN_MS: Readonly<Record<'hard_credit' | 'soft_rate' | 'account_restricted' | 'server', number>> = {
   hard_credit: 60 * 60_000,
   soft_rate: 60_000,
+  account_restricted: 30 * 60_000,
   server: 10_000,
 }
 
@@ -51,11 +58,22 @@ export const FAILURE_COOLDOWN_MS: Readonly<Record<'hard_credit' | 'soft_rate' | 
  * are request-shape problems that would fail identically on any account).
  */
 export function cooldownForKind(kind: UpstreamErrorKind, now: number = Date.now()): number | undefined {
-  const ms = kind === 'hard_credit' || kind === 'soft_rate' || kind === 'server'
+  const ms = kind === 'hard_credit' || kind === 'soft_rate' || kind === 'account_restricted' || kind === 'server'
     ? FAILURE_COOLDOWN_MS[kind]
     : undefined
   return ms === undefined ? undefined : now + ms
 }
+
+/**
+ * How many accounts one chat request may spend before the failure is reported.
+ *
+ * A cooled-out account is only reachable again on the *next* request, so
+ * without this a turn dies exactly once per bad account even though the fix
+ * (another account) is already installed. Two is the measured shape of this
+ * pool; the loop also stops early when no different account is available, so
+ * the cap only bounds pathological pools.
+ */
+const MAX_CHAT_ATTEMPTS = 3
 
 /**
  * Minimal logger surface the plugin context already provides.
@@ -108,6 +126,7 @@ function isJsonContentType(req: IncomingMessage): boolean {
 const KIND_STATUS: Readonly<Record<UpstreamErrorKind, number>> = {
   hard_credit: 402,
   soft_rate: 429,
+  account_restricted: 403,
   session_dead: 401,
   not_found: 502,
   server: 502,
@@ -253,49 +272,73 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
       ? affinityHeader
       : undefined
 
-    let credential
-    try {
-      credential = await store.resolve(sessionKey)
-    } catch (error: unknown) {
-      writeOpenAIError(res, 401, 'not_signed_in', String(error))
-      return
-    }
-
     const raw = (await readBody(req)).toString('utf8')
     const prepared = prepareChatBody(raw)
 
     const controller = new AbortController()
     req.on('close', () => controller.abort())
-    const result = await client.chatStream(credential, prepared, controller.signal)
 
-    // One line per request naming the serving account. This is the only
-    // observable evidence of selection behaviour: alternating uids mean rotation,
-    // a repeated uid within one conversation means affinity held, and an account
-    // dropping out after a failure means cooldown parked it.
-    //
-    // The uid is already a non-personal identifier (the credential file name),
-    // and only its first 8 characters are logged — enough to tell accounts apart
-    // without publishing a full identifier. The nickname is deliberately not
-    // logged: it can be a phone number, which is why `displayNameOf` masks it.
-    logger?.info(
-      `dsh-workbuddy-oauth: chat ${result.ok ? 'ok' : result.kind} via uid=${credential.uid.slice(0, 8)}`
-      + `${sessionKey === undefined ? ' (no session)' : ''}`,
-    )
+    // One request may spend more than one account: a failure parks its account
+    // and the retry then resolves a *different* one, because affinity skips a
+    // cooled account. Nothing has been written to the response yet — `writeHead`
+    // only runs below — so a later attempt can still serve this same response.
+    let result: Awaited<ReturnType<typeof client.chatStream>> | undefined
+    const tried = new Set<string>()
+    for (let attempt = 0; attempt < MAX_CHAT_ATTEMPTS; attempt += 1) {
+      let credential
+      try {
+        credential = await store.resolve(sessionKey)
+      } catch (error: unknown) {
+        writeOpenAIError(res, 401, 'not_signed_in', String(error))
+        return
+      }
+      // `resolve` only hands back an account already spent here when every
+      // candidate is cooled out, i.e. there is no fresh account left to try.
+      if (result !== undefined && tried.has(credential.uid)) break
+      tried.add(credential.uid)
+
+      const attemptResult = await client.chatStream(credential, prepared, controller.signal)
+      result = attemptResult
+
+      // One line per attempt naming the serving account. This is the only
+      // observable evidence of selection behaviour: alternating uids mean rotation,
+      // a repeated uid within one conversation means affinity held, and an account
+      // dropping out after a failure means cooldown parked it.
+      //
+      // The uid is already a non-personal identifier (the credential file name),
+      // and only its first 8 characters are logged — enough to tell accounts apart
+      // without publishing a full identifier. The nickname is deliberately not
+      // logged: it can be a phone number, which is why `displayNameOf` masks it.
+      logger?.info(
+        `dsh-workbuddy-oauth: chat ${attemptResult.ok ? 'ok' : attemptResult.kind} via uid=${credential.uid.slice(0, 8)}`
+        + `${sessionKey === undefined ? ' (no session)' : ''}`
+        + `${attempt === 0 ? '' : ` attempt ${attempt + 1}`}`,
+      )
+      if (attemptResult.ok) break
+
+      // Park the account out of selection when the failure is account-shaped, so
+      // the retry rotates instead of hitting the same wall. Request-shape
+      // failures (client/not_found) and session-dead would repeat identically on
+      // the next account, so they go straight back to the caller.
+      const until = cooldownForKind(attemptResult.kind)
+      if (until !== undefined) store.noteFailure(credential.uid, until)
+      if (until === undefined) break
+    }
+
+    if (result === undefined) {
+      writeOpenAIError(res, 500, 'internal', 'no attempt was made')
+      return
+    }
 
     if (!result.ok) {
-      // Park the account out of selection when the failure is account-shaped.
-      // The next request then rotates to another account instead of hitting the
-      // same wall immediately. Request-shape failures (client/not_found) and
-      // session-dead are deliberately not cooled.
-      const until = cooldownForKind(result.kind)
-      if (until !== undefined) store.noteFailure(credential.uid, until)
-
       const detail = extractDisplayErrorMessage(result.message) ?? result.message.slice(0, 400)
       // The host adapter classifies any error text containing a bare
       // `401`/`403` word as AUTH, which would mask business errors (safety
       // review, illegal request) behind an "invalid API key" banner. Only
       // session failures keep the status note — every 401 classifies as
-      // session_dead, so genuine auth errors stay recognisable. Known
+      // session_dead, so genuine auth errors stay recognisable. An account
+      // restriction (also a 403) stays stripped for the same reason: the text
+      // naming the restriction is what the user needs, not an AUTH banner. Known
       // residue: an extracted display text that itself names 403 still trips
       // the host heuristic; the real text wins over hiding the number.
       const statusNote = (result.status === 401 || result.status === 403) && result.kind !== 'session_dead'
