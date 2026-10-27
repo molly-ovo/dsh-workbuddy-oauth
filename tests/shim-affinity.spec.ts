@@ -88,9 +88,12 @@ describe('shim session affinity', () => {
     const response = await post(origin, token, 'session-42')
     expect(response.status).toBe(429)
 
+    // The shim retries an account-shaped failure on a fresh account, so `resolve`
+    // may run more than once per request (here the stub has a single account, so
+    // the retry finds nothing fresh and stops). Every call must carry the same key.
     // This is the glue: without it the store never sees the conversation id and
     // every turn rotates to a different account.
-    expect(store.resolveKeys).toEqual(['session-42'])
+    expect(new Set(store.resolveKeys)).toEqual(new Set(['session-42']))
   })
 
   it('passes no key when the header is absent', async () => {
@@ -98,7 +101,7 @@ describe('shim session affinity', () => {
     const { origin, token } = await startShim(store)
 
     await post(origin, token)
-    expect(store.resolveKeys).toEqual([undefined])
+    expect(new Set(store.resolveKeys)).toEqual(new Set([undefined]))
   })
 
   it('treats the header as an opaque key, verbatim', async () => {
@@ -110,7 +113,7 @@ describe('shim session affinity', () => {
     const { origin, token } = await startShim(store)
 
     await post(origin, token, ['a', 'b'])
-    expect(store.resolveKeys).toEqual(['a,b'])
+    expect(new Set(store.resolveKeys)).toEqual(new Set(['a,b']))
   })
 
   it('parks the failing account so the next turn rotates away from it', async () => {
