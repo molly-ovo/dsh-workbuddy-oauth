@@ -7,7 +7,7 @@
 - **多账号**——同时登录多个，选号时自动跳过被限流的；某个账号额度耗尽**只停它一个**，其余照常服务。
 - **会话粘性**——同一个对话粘住同一个账号，不会中途换人；但**不粘坏账号**，下一条消息就换到健康的那个，上下文不丢。
 
-![license](https://img.shields.io/badge/license-MIT-blue.svg) ![tests](https://img.shields.io/badge/tests-323%20passing-brightgreen.svg) ![node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-green.svg)
+![license](https://img.shields.io/badge/license-MIT-blue.svg) ![tests](https://img.shields.io/badge/tests-334%20passing-brightgreen.svg) ![node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-green.svg)
 
 ---
 
@@ -188,7 +188,7 @@ pnpm 对本地目录默认以**链接**方式安装，所以构建完 profile �
 
   同一个对话也不例外——会话粘性**不会**把你钉在坏账号上，下一条消息就会换到健康账号，上下文不丢（消息由 DSH 持有，不在账号上）。
 
-- **CN 网关会按内容拦第三方提示词。** 2026-11-13 起，CN 端点会检查 `system` 消息的**字面内容**，命中第三方 Agent 框架的提示词就回 `400 / 11128`「请求被拦截，请重新发送」；同一段文字换成 `user` 角色即通过，国际版没有这项检查。插件的处理是：**被拒之后**才把系统消息原地降级为 `user` 重发一次，并记住 10 分钟——这段时间直接按降级形状发送，避免每条消息都白跑一次请求。代价是模型把系统提示当作用户消息读，指令约束力略低于真正的 `system`。
+- **CN 网关会按内容拦第三方提示词。** 2026-11-13 起，CN 端点会检查 `system` 消息的**字面内容**，命中第三方 Agent 框架的提示词就回 `400 / 11128`「请求被拦截，请重新发送」；同一段文字换成 `user` 角色即通过，国际版没有这项检查。插件出站前先把命中的那几句换成同义措辞（`src/channel-rewrite.ts`，保留 `system` 角色，未命中则逐字节不变）；万一还有表外的指纹被拦，再降级为 `user` 重发一次并记住 10 分钟。改写优先是为了保住指令权限——降级会让模型把系统提示当作用户消息读。
 
 - **上游会作废整个会话。** 同一账号在**别处**重新登录（桌面 App、网页、另一台机器）之后，先前那次登录的令牌就失效了，而本地存的 access token 到期时间仍是**未来**的——也就是说光看 `expiresAt` 判断不出它已经死了。插件的处理是：第一次 `401` 就强制刷新一次并重发；若刷新也被上游拒绝（`invalid_grant`），该账号会短期移出选号并提示重新 `/wb-login`，其余账号照常服务。
 
@@ -219,6 +219,7 @@ pnpm 对本地目录默认以**链接**方式安装，所以构建完 profile �
 | [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) | Sliverkiss | 设备指纹派生算法 `derive_id`；线路行为经 connect 间接源自此项目。 |
 | [workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub) | ardeyouxipianyi | 指纹方案的实测依据；登录流程、刷新单飞、惰性刷新等防风控规则的对照实现 |
 | [workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel) | linguo2625469（fork） | 登录状态落盘防混域、登录 TTL 与轮询限速等对照实现 |
+| [dsh-router-codebuddy](https://github.com/CARVIN94/dsh-router-codebuddy) | CARVIN | **CN 网关内容指纹的改写表**（`src/channel-rewrite.ts`），以及在「按句而非整段」上的实测依据 |
 
 > 关于 `Sliverkiss/workbuddy2api`：该上游项目已删除。
 

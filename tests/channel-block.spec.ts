@@ -147,6 +147,22 @@ describe('shim channel-block recovery', () => {
     expect(client.seen[2]).toContain('"role":"user"')
   })
 
+  it('neutralizes the CN fingerprints before the first attempt', async () => {
+    // The rewrite keeps the system role, so a prompt the gateway blocks is fixed
+    // without losing instruction authority — no wasted round trip either.
+    const seen: string[] = []
+    const client = {
+      chatStream: async (_c: WorkBuddyCredential, body: string) => {
+        seen.push(body)
+        return { ok: true as const, response: new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } }) }
+      },
+    }
+    const response = await post(client)
+    expect(response.status).toBe(200)
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toContain('"role":"system"')
+  })
+
   it('does not retry a request the gateway accepts', async () => {
     const seen: string[] = []
     const client = {

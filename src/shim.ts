@@ -32,6 +32,7 @@ import {
 } from './upstream.ts'
 import { stateFilePath } from './credentials.ts'
 import { refreshCredential } from './refresh.ts'
+import { rewriteChannelFingerprints } from './channel-rewrite.ts'
 
 /**
  * How long an upstream failure parks an account out of selection.
@@ -355,7 +356,11 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
     // the rejection is remembered for a while and the retry is sent directly.
     // Bounded by a TTL so a changed gateway is re-probed instead of being
     // demoted forever.
-    let outbound = Date.now() < channelBlockedUntil ? demoteInstructionMessage(prepared) : prepared
+    // CN first: neutralize the fingerprints the gateway compares, which keeps
+    // the instructions in `system` where their authority belongs. Then, if a
+    // rejection is still remembered, skip straight to the role demotion.
+    let outbound = credential.region === 'cn' ? rewriteChannelFingerprints(prepared) : prepared
+    if (Date.now() < channelBlockedUntil) outbound = demoteInstructionMessage(outbound)
     let result = await client.chatStream(credential, outbound, controller.signal)
 
     /**
@@ -390,18 +395,18 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
     }
 
     /**
-     * Recover from the gateway's channel check (400 / 11128).
+     * Fallback for a fingerprint the rewrite table has not learned yet.
      *
-     * The CN gateway reads the **system** message against a literal blocklist of
-     * third-party harness prompts and answers 「请求被拦截，请重新发送」 when it
-     * matches. The same bytes one role over are accepted, so the recovery is to
-     * re-issue the instruction message as `user` and retry once. Only after a
-     * rejection: a request the gateway accepts keeps its system role.
+     * `rewriteChannelFingerprints` already ran on CN, so reaching here means the
+     * gateway matched something outside the table. The scan only reads `system`,
+     * so re-issuing the instruction message as `user` gets past a check of any
+     * wording — at the cost of instruction authority, which is why it is the
+     * second choice and why the rejection is remembered.
      */
     if (!result.ok && result.status === 400 && isChannelBlock(result.message)) {
       channelBlockedUntil = Date.now() + CHANNEL_BLOCK_MEMORY_MS
-      const demoted = demoteInstructionMessage(prepared)
-      if (demoted !== prepared && demoted !== outbound) {
+      const demoted = demoteInstructionMessage(outbound)
+      if (demoted !== outbound) {
         logger?.warn('dsh-workbuddy-oauth: gateway blocked the system message (11128); retrying it as a user message')
         outbound = demoted
         result = await client.chatStream(credential, outbound, controller.signal)
@@ -432,7 +437,7 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
       logger?.warn(
         `dsh-workbuddy-oauth: upstream ${result.status} ${result.kind}: ${result.message.slice(0, 600)}`,
       )
-      logger?.warn(`dsh-workbuddy-oauth: request shape ${describeChatBody(prepared)}`)
+      logger?.warn(`dsh-workbuddy-oauth: request shape ${describeChatBody(outbound)}`)
       if (result.kind === 'client') {
         // Everything above is structure; a gateway that rejects on *content*
         // (the 11128 channel check) needs the bytes to be diagnosable at all.
@@ -440,7 +445,7 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
         // failure — it is the one artefact that turns "请求被拦截" into a diff.
         const dumpPath = stateFilePath('last-failed-request.json')
         try {
-          await writeFile(dumpPath, prepared, { mode: 0o600 })
+          await writeFile(dumpPath, outbound, { mode: 0o600 })
           logger?.warn(`dsh-workbuddy-oauth: failed request body written to ${dumpPath}`)
         } catch {
           // A failed diagnostic must never mask the real failure.
