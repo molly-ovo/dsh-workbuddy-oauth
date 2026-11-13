@@ -38,13 +38,22 @@ describe('piAiVersionWarning', () => {
     expect(warning).toContain('autoInstallPeers')
   })
 
-  it('reports a newer third-party copy the same way', () => {
-    // A co-installed plugin may also upgrade past the generation this build was
-    // tested against; the message is a version mismatch either way.
-    const warning = piAiVersionWarning('1.0.4')
+  it('reports a copy from another major generation', () => {
+    // The host's own `dsh-llm-pi-ai` declares `^1.3.0`, so any 1.x is a
+    // legitimate peer resolution; a 2.x copy is a different generation and the
+    // one case worth interrupting the log for.
+    const warning = piAiVersionWarning('2.0.0')
     expect(warning).toBeDefined()
-    expect(warning).toContain('1.0.4')
+    expect(warning).toContain('2.0.0')
     expect(warning).toContain(REQUIRED_PI_AI_VERSION)
+  })
+
+  it('stays silent inside the supported major line', () => {
+    // The exact patch is the host's choice, not this plugin's: 1.3.0 is the
+    // floor the host declares and 1.5.x may already be shipping in a newer
+    // build. Neither is a mismatch.
+    expect(piAiVersionWarning('1.3.0')).toBeUndefined()
+    expect(piAiVersionWarning('1.5.2')).toBeUndefined()
   })
 
   it('carries no absolute filesystem path', () => {

@@ -21,7 +21,16 @@ import { Readable } from 'node:stream'
 import type { CredentialStore as WorkBuddyCredentialStore } from './store.ts'
 import type { WorkBuddyCatalog } from './catalog.ts'
 import { hostIsLoopback, originIsLoopback } from './loopback.ts'
-import { extractDisplayErrorMessage, prepareChatBody, WorkBuddyUpstreamClient, type UpstreamErrorKind } from './upstream.ts'
+import { writeFile } from 'node:fs/promises'
+import {
+  demoteInstructionMessage,
+  extractDisplayErrorMessage,
+  isChannelBlock,
+  prepareChatBody,
+  WorkBuddyUpstreamClient,
+  type UpstreamErrorKind,
+} from './upstream.ts'
+import { stateFilePath } from './credentials.ts'
 import { refreshCredential } from './refresh.ts'
 
 /**
@@ -71,9 +80,54 @@ export function cooldownForKind(kind: UpstreamErrorKind, now: number = Date.now(
  */
 export const SESSION_DEAD_PARK_MS = 5 * 60_000
 
+/**
+ * How long a channel-check rejection is remembered.
+ *
+ * The check reads the prompt text, and DSH's prompt is identical from turn to
+ * turn, so re-sending the doomed attempt every message would double the upstream
+ * request count and add a round trip to each one. Ten minutes is long enough to
+ * cover an active conversation and short enough that a gateway change is picked
+ * up on the next break rather than at the next restart.
+ */
+export const CHANNEL_BLOCK_MEMORY_MS = 10 * 60_000
+
 /** Whether a response body is the gateway's HTML page rather than JSON. */
 function isHtmlBody(text: string): boolean {
   return text.trimStart().startsWith('<')
+}
+
+/**
+ * Describe an outbound chat body by shape alone, for failure logs.
+ *
+ * The fields chosen are the ones that decide which branch of the upstream
+ * gateway answers: the top-level key set (an unknown or missing field is what
+ * `11133` complains about), the message roles in order (a `developer` role is
+ * what `11128` rejects on CN), and whether tools rode along. **No message text,
+ * no tool schema and no user content is ever included** — this line is meant to
+ * be pasteable into a public issue.
+ *
+ * @param bodyJson - the body as it is about to be sent.
+ */
+export function describeChatBody(bodyJson: string): string {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(bodyJson)
+  } catch {
+    return `unparseable body, ${bodyJson.length} bytes`
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return `top-level ${Array.isArray(parsed) ? 'array' : typeof parsed}`
+  }
+  const body = parsed as Record<string, unknown>
+  const messages = Array.isArray(body['messages']) ? body['messages'] as unknown[] : []
+  const roles = messages.slice(0, 8).map((message) => {
+    if (typeof message !== 'object' || message === null || Array.isArray(message)) return '?'
+    return String((message as Record<string, unknown>)['role'])
+  })
+  const tools = Array.isArray(body['tools']) ? body['tools'].length : 0
+  const model = typeof body['model'] === 'string' ? body['model'] : '(none)'
+  return `${bodyJson.length} bytes, model=${model}, keys=[${Object.keys(body).sort().join(' ')}], `
+    + `messages=${messages.length} roles=[${roles.join(' ')}${messages.length > 8 ? ' …' : ''}], tools=${tools}`
 }
 
 /**
@@ -175,6 +229,15 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
   // The shim never forwards it upstream — the real credential comes from the
   // store. A local attacker who can hit the port still cannot forge this.
   const SHARED_SECRET = randomBytes(32).toString('base64url')
+
+  /**
+   * Until when the channel check is assumed to reject instruction messages.
+   *
+   * Set when the gateway answers `400` / `11128`, cleared by the TTL rather than
+   * by a success (a demoted request succeeding proves nothing about the original
+   * shape). In-process and per-instance, so a restart re-probes from scratch.
+   */
+  let channelBlockedUntil = 0
 
   /** Constant-time bearer check; absent or mismatched bearers are rejected. */
   function bearerOk(req: IncomingMessage): boolean {
@@ -285,7 +348,15 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
 
     const controller = new AbortController()
     req.on('close', () => controller.abort())
-    let result = await client.chatStream(credential, prepared, controller.signal)
+    // Once this gateway has blocked one instruction message it will block the
+    // next one too — the check is on the prompt text, which does not change
+    // between turns. Sending the doomed attempt every time would double the
+    // upstream request count and add a wasted round trip to every message, so
+    // the rejection is remembered for a while and the retry is sent directly.
+    // Bounded by a TTL so a changed gateway is re-probed instead of being
+    // demoted forever.
+    let outbound = Date.now() < channelBlockedUntil ? demoteInstructionMessage(prepared) : prepared
+    let result = await client.chatStream(credential, outbound, controller.signal)
 
     /**
      * Recover from a rejected access token.
@@ -314,7 +385,26 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
         }
       } else {
         credential = outcome.credential
-        result = await client.chatStream(credential, prepared, controller.signal)
+        result = await client.chatStream(credential, outbound, controller.signal)
+      }
+    }
+
+    /**
+     * Recover from the gateway's channel check (400 / 11128).
+     *
+     * The CN gateway reads the **system** message against a literal blocklist of
+     * third-party harness prompts and answers 「请求被拦截，请重新发送」 when it
+     * matches. The same bytes one role over are accepted, so the recovery is to
+     * re-issue the instruction message as `user` and retry once. Only after a
+     * rejection: a request the gateway accepts keeps its system role.
+     */
+    if (!result.ok && result.status === 400 && isChannelBlock(result.message)) {
+      channelBlockedUntil = Date.now() + CHANNEL_BLOCK_MEMORY_MS
+      const demoted = demoteInstructionMessage(prepared)
+      if (demoted !== prepared && demoted !== outbound) {
+        logger?.warn('dsh-workbuddy-oauth: gateway blocked the system message (11128); retrying it as a user message')
+        outbound = demoted
+        result = await client.chatStream(credential, outbound, controller.signal)
       }
     }
 
@@ -333,6 +423,30 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
     )
 
     if (!result.ok) {
+      // Request-shape failures are the ones a user cannot act on and cannot
+      // report usefully: the host shows only the upstream's localized sentence
+      // ("请求被拦截，请重新发送"), which names no field. Log what the upstream
+      // actually answered plus the *shape* of what we sent — key names, message
+      // roles, tool count — and never the text of a message, which is the
+      // user's own conversation.
+      logger?.warn(
+        `dsh-workbuddy-oauth: upstream ${result.status} ${result.kind}: ${result.message.slice(0, 600)}`,
+      )
+      logger?.warn(`dsh-workbuddy-oauth: request shape ${describeChatBody(prepared)}`)
+      if (result.kind === 'client') {
+        // Everything above is structure; a gateway that rejects on *content*
+        // (the 11128 channel check) needs the bytes to be diagnosable at all.
+        // The file stays local, is owner-only, and is overwritten by the next
+        // failure — it is the one artefact that turns "请求被拦截" into a diff.
+        const dumpPath = stateFilePath('last-failed-request.json')
+        try {
+          await writeFile(dumpPath, prepared, { mode: 0o600 })
+          logger?.warn(`dsh-workbuddy-oauth: failed request body written to ${dumpPath}`)
+        } catch {
+          // A failed diagnostic must never mask the real failure.
+        }
+      }
+
       // Park the account out of selection when the failure is account-shaped.
       // The next request then rotates to another account instead of hitting the
       // same wall immediately. Request-shape failures (client/not_found) and

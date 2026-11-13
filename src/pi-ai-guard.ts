@@ -1,6 +1,6 @@
 /**
  * Confirm the pi-ai copy this plugin actually loaded is the generation the DSH
- * 0.2.0-rc.2 host was built against.
+ * 0.2.2 host was built against.
  *
  * pi-ai is a peer dependency here, so the profile resolves the copy the host
  * itself uses. #92's failure mode is what that arrangement has to survive: a
@@ -28,7 +28,19 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /** The pi-ai generation this plugin is built and tested against. */
-export const REQUIRED_PI_AI_VERSION = '0.87.1'
+export const REQUIRED_PI_AI_VERSION = '1.4.0'
+
+/**
+ * The major line the host and this plugin can share.
+ *
+ * Checked instead of the exact version because pi-ai is a peer: the host's own
+ * `dsh-llm-pi-ai` declares `^1.3.0`, so the profile is free to resolve any 1.x
+ * copy for both of them, and a minor bump there is the host's call rather than
+ * a fault here. The break that #92 measured was a *major* generation gap — a
+ * 0.87 copy winning bare-specifier resolution for a host built on 1.x — and
+ * that is the line worth reporting.
+ */
+export const REQUIRED_PI_AI_MAJOR = '1'
 
 /**
  * Read the version of the pi-ai copy Node resolves for *this* module.
@@ -87,10 +99,13 @@ export function resolvedPiAiVersion(): string | undefined {
  */
 export function piAiVersionWarning(resolved?: string | undefined): string | undefined {
   const version = arguments.length === 0 ? resolvedPiAiVersion() : resolved
-  if (version === undefined || version === REQUIRED_PI_AI_VERSION) return undefined
+  if (version === undefined) return undefined
+  // Same major line: the host decides the minor, so this copy is usable.
+  if (version.split('.')[0] === REQUIRED_PI_AI_MAJOR) return undefined
   return `loaded @earendil-works/pi-ai ${version}, but this plugin is built for `
-    + `${REQUIRED_PI_AI_VERSION}. pi-ai is a peer dependency, so the profile decides `
-    + 'which copy this plugin gets — check the profile\'s own pi-ai entry (a pnpm '
-    + 'profile with nodeLinker "hoisted" and autoInstallPeers false can expose '
-    + `another package's older copy). Pinning ${REQUIRED_PI_AI_VERSION} there resolves it`
+    + `${REQUIRED_PI_AI_VERSION} (pi-ai ${REQUIRED_PI_AI_MAJOR}.x). pi-ai is a peer dependency, `
+    + 'so the profile decides which copy this plugin gets — check the profile\'s own pi-ai '
+    + 'entry (a pnpm profile with nodeLinker "hoisted" and autoInstallPeers false can expose '
+    + `another package's copy from a different generation). Pinning a ${REQUIRED_PI_AI_MAJOR}.x `
+    + 'release there resolves it'
 }

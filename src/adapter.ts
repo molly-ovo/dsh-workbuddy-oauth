@@ -37,6 +37,13 @@ const REQUEST_IMAGE_BUDGETS = {
   maxRequestImageBytes: 20_971_520,
   requestImagePixelBudget: 4_194_304,
   requestImageMaxBytes: 1_048_576,
+  // Required by `ResolvedPiAiProviderProfile` since DSH 0.2.2-rc.1. These are
+  // the core's own resolved defaults (`maxRequestImages ?? 50`,
+  // `imageOffloadCountQuantum ?? min(10, maxRequestImages)`), repeated here
+  // because this plugin builds the resolved profile itself instead of letting
+  // the core's config schema fill them in.
+  maxRequestImages: 50,
+  imageOffloadCountQuantum: 10,
 } as const
 
 /**
@@ -329,6 +336,14 @@ function toPiModel(
       maxTokensField: 'max_tokens',
       sendSessionAffinityHeaders: true,
       sessionAffinityFormat: 'openrouter',
+      // pi-ai turns the instruction message into `role: "developer"` whenever
+      // the model declares reasoning and this flag is on, and the CN endpoint
+      // answers that role with `400` / `11128` ("Illegal API invocation from an
+      // unapproved channel") — measured 2026-11-13, and the only body shape in
+      // a sweep of keys/roles/orderings that does it. Declaring the limit here
+      // is the load-bearing half; `prepareChatBody` keeps its rewrite as the
+      // second line of defence for a request this flag cannot reach.
+      supportsDeveloperRole: false,
     },
   } as unknown as Model<Api>
 }
