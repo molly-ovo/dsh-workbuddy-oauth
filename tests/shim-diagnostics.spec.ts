@@ -8,8 +8,13 @@
  * the structure is present, and **no message text or tool schema leaks**.
  */
 
-import { describe, expect, it } from 'vitest'
-import { describeChatBody } from '../src/shim.ts'
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createWorkBuddyShim, describeChatBody } from '../src/shim.ts'
+import { WorkBuddyCatalog } from '../src/catalog.ts'
+import type { CredentialStore } from '../src/store.ts'
 
 const BODY = JSON.stringify({
   model: 'deepseek-v4.1-flash',
@@ -48,5 +53,66 @@ describe('describeChatBody', () => {
     const summary = describeChatBody(long)
     expect(summary).toContain('messages=20')
     expect(summary).toContain('…')
+  })
+})
+
+describe('failing-request archive', () => {
+  const savedHome = process.env['DSH_HOME']
+  const savedFlag = process.env['DSH_WORKBUDDY_DUMP_REQUEST']
+  let home: string | undefined
+
+  afterEach(async () => {
+    if (savedHome === undefined) delete process.env['DSH_HOME']
+    else process.env['DSH_HOME'] = savedHome
+    if (savedFlag === undefined) delete process.env['DSH_WORKBUDDY_DUMP_REQUEST']
+    else process.env['DSH_WORKBUDDY_DUMP_REQUEST'] = savedFlag
+    if (home !== undefined) await rm(home, { recursive: true, force: true })
+    home = undefined
+  })
+
+  /** Drive one request whose upstream answer is a client-shaped 400. */
+  async function request(homeDir: string): Promise<void> {
+    process.env['DSH_HOME'] = homeDir
+    const store: CredentialStore = {
+      async resolve() {
+        return {
+          accessToken: 'at', refreshToken: 'rt', expiresAtMs: Date.now() + 3_600_000,
+          domain: 'copilot.tencent.com', uid: 'uid-a', region: 'cn',
+        }
+      },
+      async current() { return undefined },
+      noteFailure() {},
+      async clearFailure() {},
+    }
+    const shim = createWorkBuddyShim({
+      store,
+      client: {
+        chatStream: async () => ({ ok: false as const, status: 400, kind: 'client' as const, message: '{"code":11128,"msg":"Illegal API invocation from an unapproved channel"}' }),
+      } as never,
+      catalog: new WorkBuddyCatalog(),
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    })
+    await shim.ready
+    await fetch(`${shim.baseUrl()}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${shim.token()}` },
+      body: JSON.stringify({ model: 'm', messages: [{ role: 'system', content: 'INSTRUCTIONS' }, { role: 'user', content: 'hi' }] }),
+    })
+    await shim.close()
+  }
+
+  it('writes nothing by default — a released plugin does not archive prompts', async () => {
+    home = await mkdtemp(join(tmpdir(), 'wb-dump-off-'))
+    delete process.env['DSH_WORKBUDDY_DUMP_REQUEST']
+    await request(home)
+    await expect(access(join(home, 'workbuddy-oauth', 'last-failed-request.json'))).rejects.toThrow()
+  })
+
+  it('archives the body when the operator opts in', async () => {
+    home = await mkdtemp(join(tmpdir(), 'wb-dump-on-'))
+    process.env['DSH_WORKBUDDY_DUMP_REQUEST'] = '1'
+    await request(home)
+    const text = await readFile(join(home, 'workbuddy-oauth', 'last-failed-request.json'), 'utf8')
+    expect(text).toContain('INSTRUCTIONS')
   })
 })

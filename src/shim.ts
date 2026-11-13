@@ -21,7 +21,7 @@ import { Readable } from 'node:stream'
 import type { CredentialStore as WorkBuddyCredentialStore } from './store.ts'
 import type { WorkBuddyCatalog } from './catalog.ts'
 import { hostIsLoopback, originIsLoopback } from './loopback.ts'
-import { writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import {
   demoteInstructionMessage,
   extractDisplayErrorMessage,
@@ -91,6 +91,23 @@ export const SESSION_DEAD_PARK_MS = 5 * 60_000
  * up on the next break rather than at the next restart.
  */
 export const CHANNEL_BLOCK_MEMORY_MS = 10 * 60_000
+
+/**
+ * Environment variable that opts a *release* build into writing the failing
+ * request body to disk.
+ *
+ * Off by default: the body is the user's own conversation, and a plugin that
+ * silently archives prompts on every 400 would be doing something its user did
+ * not ask for. Set it to any non-empty value when diagnosing a new gateway rule
+ * (`DSH_WORKBUDDY_DUMP_REQUEST=1`), then unset it.
+ */
+export const DUMP_REQUEST_ENV = 'DSH_WORKBUDDY_DUMP_REQUEST'
+
+/** Whether the operator asked for failing request bodies to be archived. */
+function requestDumpEnabled(): boolean {
+  const value = process.env[DUMP_REQUEST_ENV]
+  return value !== undefined && value.trim() !== ''
+}
 
 /** Whether a response body is the gateway's HTML page rather than JSON. */
 function isHtmlBody(text: string): boolean {
@@ -433,18 +450,19 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
       // ("请求被拦截，请重新发送"), which names no field. Log what the upstream
       // actually answered plus the *shape* of what we sent — key names, message
       // roles, tool count — and never the text of a message, which is the
-      // user's own conversation.
+      // user's own conversation. Both lines are safe to paste into an issue.
       logger?.warn(
         `dsh-workbuddy-oauth: upstream ${result.status} ${result.kind}: ${result.message.slice(0, 600)}`,
       )
       logger?.warn(`dsh-workbuddy-oauth: request shape ${describeChatBody(outbound)}`)
-      if (result.kind === 'client') {
-        // Everything above is structure; a gateway that rejects on *content*
-        // (the 11128 channel check) needs the bytes to be diagnosable at all.
-        // The file stays local, is owner-only, and is overwritten by the next
-        // failure — it is the one artefact that turns "请求被拦截" into a diff.
+      if (result.kind === 'client' && requestDumpEnabled()) {
+        // Structure alone cannot explain a gateway that rejects on *content*
+        // (the 11128 check) — the bytes are needed. But those bytes are the
+        // user's own conversation, so this is opt-in: a released plugin never
+        // writes prompts to disk unless the operator asked for it.
         const dumpPath = stateFilePath('last-failed-request.json')
         try {
+          await mkdir(stateFilePath('.'), { recursive: true })
           await writeFile(dumpPath, outbound, { mode: 0o600 })
           logger?.warn(`dsh-workbuddy-oauth: failed request body written to ${dumpPath}`)
         } catch {
