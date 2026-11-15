@@ -7,7 +7,7 @@
 - **多账号**——同时登录多个，选号时自动跳过被限流的；某个账号额度耗尽**只停它一个**，其余照常服务。
 - **会话粘性**——同一个对话粘住同一个账号，不会中途换人；但**不粘坏账号**，下一条消息就换到健康的那个，上下文不丢。
 
-![license](https://img.shields.io/badge/license-MIT-blue.svg) ![tests](https://img.shields.io/badge/tests-334%20passing-brightgreen.svg) ![node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-green.svg)
+![license](https://img.shields.io/badge/license-MIT-blue.svg) ![tests](https://img.shields.io/badge/tests-346%20passing-brightgreen.svg) ![node](https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-green.svg)
 
 ---
 
@@ -184,11 +184,11 @@ pnpm 对本地目录默认以**链接**方式安装，所以构建完 profile �
 - **推理档位需手动探测。** 上游未提供档位元数据，只能靠实际请求试出来；探测会消耗积分。
 - **国际版与国内版是两套账号体系**，额度互不通用，需分别登录。
 - **模型目录随上游变化**，本地缓存可能滞后。
-- **失败换号要等到下一次请求。** 某账号被限流或额度耗尽时，**当前这次请求仍会返回错误**；该账号被冷却后，**下一次请求**才会自动落到另一个可用账号上。
+- **换号在请求内完成，但只在流开始之前。** 某账号被限流、额度耗尽、被判「账号受限」（`403 / 11140`）或上游 5xx 时，插件会把**同一个请求体**交给另一个可用账号重试，一次请求最多试 3 个账号，且绝不重试本次已经失败过的账号。这对调用方是透明的：失败的那次只产生了错误响应，**没有任何字节写进响应流**，所以不存在重复输出。
 
-  插件**不做请求内重试**——只有一处例外：chat 返回 `401` 且**流尚未开始**时，会用**同一账号**刷新后的新令牌把同一个请求体重发一次。流式响应一旦开始就无法透明重发；同一个请求体换**账号**重发会放大上游风控风险，所以换代仍然只在下一次请求发生。DSH 自身的重试层在重试时会重新走一遍选号，所以实际体验通常是「偶发一次报错后自动恢复」。
+  流式响应**一旦开始**就无法透明重发，所以那之后的中断仍然只会报错，靠 DSH 自己的重试层恢复。至于「同一个请求体换账号会不会放大风控风险」——因为只在流开始前发生，且账号本身已是可用状态，风险与正常轮换相同。
 
-  同一个对话也不例外——会话粘性**不会**把你钉在坏账号上，下一条消息就会换到健康账号，上下文不丢（消息由 DSH 持有，不在账号上）。
+  会话粘性**不会**把你钉在坏账号上：失败账号在重试前就被冷却（`hard_credit` 1 小时 / `account_restricted` 30 分钟 / `soft_rate` 1 分钟 / `server` 10 秒），重试选到的必然是健康账号，并被重新钉到当前对话上。上下文不丢（消息由 DSH 持有，不在账号上）。
 
 - **CN 网关会按内容拦第三方提示词。** 2026-11-13 起，CN 端点会检查 `system` 消息的**字面内容**，命中第三方 Agent 框架的提示词就回 `400 / 11128`「请求被拦截，请重新发送」；同一段文字换成 `user` 角色即通过，国际版没有这项检查。插件出站前先把命中的那几句换成同义措辞（`src/channel-rewrite.ts`，保留 `system` 角色，未命中则逐字节不变）；万一还有表外的指纹被拦，再降级为 `user` 重发一次并记住 10 分钟。改写优先是为了保住指令权限——降级会让模型把系统提示当作用户消息读。
 
@@ -222,6 +222,7 @@ pnpm 对本地目录默认以**链接**方式安装，所以构建完 profile �
 | [workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub) | ardeyouxipianyi | 指纹方案的实测依据；登录流程、刷新单飞、惰性刷新等防风控规则的对照实现 |
 | [workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel) | linguo2625469（fork） | 登录状态落盘防混域、登录 TTL 与轮询限速等对照实现 |
 | [dsh-router-codebuddy](https://github.com/CARVIN94/dsh-router-codebuddy) | CARVIN | **CN 网关内容指纹的改写表**（`src/channel-rewrite.ts`），以及在「按句而非整段」上的实测依据 |
+| PR [#3](https://github.com/molly-ovo/dsh-workbuddy-oauth/pull/3) | muhib-karim | **「账号受限」`403 / 11140` 的实测与换号重试设计**（`account_restricted` 类别、冷却时长、请求内换号的上限与排除规则）。原始 PR 已关闭，结论收进本仓库 |
 
 > 关于 `Sliverkiss/workbuddy2api`：该上游项目已删除。
 

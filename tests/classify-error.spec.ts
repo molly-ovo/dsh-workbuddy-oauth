@@ -50,6 +50,28 @@ describe('classifyUpstreamError', () => {
     expect(classifyUpstreamError(429, '{"code":1234,"msg":"too many requests"}')).toBe('soft_rate')
   })
 
+  it('reads a restricted account from 403 with business code 11140', () => {
+    // PR #3's measurement: the account is neither out of credit nor signed out,
+    // so without its own class it fell through to `client` — which neither
+    // parks it nor fails over, leaving a conversation pinned to it.
+    expect(classifyUpstreamError(403, '{"code":11140,"msg":"account restricted"}')).toBe('account_restricted')
+    expect(classifyUpstreamError(403, '{"displayMsg":{"zh":"账号已被限制，请联系客服"}}')).toBe('account_restricted')
+  })
+
+  it('keeps a 403 dead session ahead of the restriction class', () => {
+    // A dead session is also answered with 403, and "sign in again" is the more
+    // specific instruction — the session markers must win.
+    expect(classifyUpstreamError(403, '{"msg":"Offline user session not found"}')).toBe('session_dead')
+    expect(classifyUpstreamError(403, '{"msg":"Offline user session not found","code":11140}')).toBe('session_dead')
+  })
+
+  it('leaves an ordinary 403 as a request-shape failure', () => {
+    // Only the measured code/messages park an account: a guess would take a
+    // healthy account out of rotation for half an hour.
+    expect(classifyUpstreamError(403, '{"msg":"forbidden"}')).toBe('client')
+    expect(classifyUpstreamError(403, '{"code":11101,"msg":"bad json"}')).toBe('client')
+  })
+
   it('keeps the non-parking classes intact', () => {
     expect(classifyUpstreamError(401, '{}')).toBe('session_dead')
     expect(classifyUpstreamError(401, '{"msg":"Offline user session not found"}')).toBe('session_dead')

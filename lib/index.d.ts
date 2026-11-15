@@ -390,6 +390,19 @@ declare function refreshCredential(uid: string, deps?: RefreshDeps): Promise<Ref
 declare class NotSignedInError extends Error {
   constructor(message?: string);
 }
+/** Options for {@link CredentialStore.resolve}. */
+interface ResolveOptions {
+  /**
+   * Accounts that must not be chosen, typically the ones this same request has
+   * already failed on.
+   *
+   * Written as an exclusion rather than "give me account N" on purpose: the
+   * shim knows which uids it already tried, not which one is next. The store
+   * keeps ownership of *selection* (region, disabled, cooldown, ring order) and
+   * only narrows the candidate set.
+   */
+  exclude?: readonly string[];
+}
 /** What the ported code needs from a credential store. */
 interface CredentialStore {
   /**
@@ -398,8 +411,10 @@ interface CredentialStore {
    * @param sessionKey - optional conversation identity. When given, and an
    *   account is already pinned to it and still selectable, that account wins —
    *   so one conversation keeps one account instead of hopping mid-turn.
+   * @param options - see {@link ResolveOptions}; used to fail a request over to
+   *   a different account without the caller having to name one.
    */
-  resolve(sessionKey?: string): Promise<WorkBuddyCredential>;
+  resolve(sessionKey?: string, options?: ResolveOptions): Promise<WorkBuddyCredential>;
   /** The current credential without refreshing, or `undefined` when none. */
   current(): Promise<WorkBuddyCredential | undefined>;
   /**
@@ -605,7 +620,7 @@ declare function probeModel(options: {
 //#endregion
 //#region src/upstream.d.ts
 /** Upstream failure classes the shim maps onto distinct HTTP answers. */
-type UpstreamErrorKind = 'hard_credit' | 'soft_rate' | 'session_dead' | 'not_found' | 'server' | 'client';
+type UpstreamErrorKind = 'hard_credit' | 'soft_rate' | 'session_dead' | 'account_restricted' | 'not_found' | 'server' | 'client';
 /** One CLI-usable model as the upstream catalog describes it. */
 interface WorkBuddyUpstreamModel {
   id: string;

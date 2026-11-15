@@ -35,6 +35,7 @@ export type UpstreamErrorKind =
   | 'hard_credit'
   | 'soft_rate'
   | 'session_dead'
+  | 'account_restricted'
   | 'not_found'
   | 'server'
   | 'client'
@@ -335,6 +336,25 @@ function resolveUpstreamBilling(
 const SESSION_DEAD_MARKERS: readonly string[] = ['Offline user session not found', '12153']
 
 /**
+ * Business code for "this account is restricted", answered as HTTP 403.
+ *
+ * Measured by a contributor against a restricted CN account (PR #3, 2026-10-27):
+ * `403` + `code 11140`. The account is not out of credit and its session is
+ * still valid — the upstream simply refuses to serve it. Nothing a retry can fix,
+ * but another signed-in account can serve the same request, so the class exists
+ * to let the shim fail over instead of leaving a conversation pinned to it.
+ *
+ * The message markers are a hedge for the day the code moves: the observable
+ * sentence is 「账号已被限制」 in the same body. They are deliberately few and
+ * narrow — a marker that also matches ordinary business errors would park a
+ * healthy account for half an hour.
+ */
+const ACCOUNT_RESTRICTED_CODE = '11140'
+const ACCOUNT_RESTRICTED_MARKERS: readonly string[] = [
+  '账号已被限制', '账号被限制', '账号已被禁用', 'account restricted',
+]
+
+/**
  * Classify an upstream failure from its HTTP status and body excerpt.
  *
  * **Credit is checked before the status-code fallbacks, deliberately.** The
@@ -361,6 +381,13 @@ export function classifyUpstreamError(status: number, body: string): UpstreamErr
   }
   for (const marker of SESSION_DEAD_MARKERS) {
     if (body.includes(marker)) return 'session_dead'
+  }
+  // A 403 carrying the restriction code is about the *account*, not the request.
+  // Checked after the session markers because a dead session is also answered
+  // with 403, and "sign in again" is the more specific instruction of the two.
+  if (status === 403 && (body.includes(ACCOUNT_RESTRICTED_CODE)
+    || ACCOUNT_RESTRICTED_MARKERS.some((marker) => lower.includes(marker.toLowerCase())))) {
+    return 'account_restricted'
   }
   if (status === 429) return 'soft_rate'
   if (status === 404) return 'not_found'

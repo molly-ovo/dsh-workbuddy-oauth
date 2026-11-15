@@ -26,16 +26,18 @@ const CREDENTIAL: WorkBuddyCredential = {
 
 /** A store stub that records what it was asked for. */
 function recordingStore(): CredentialStore & {
-  resolveKeys: Array<string | undefined>
+  resolveCalls: Array<{ key: string | undefined; exclude: readonly string[] }>
   failures: Array<{ uid: string; untilMs: number }>
 } {
-  const resolveKeys: Array<string | undefined> = []
+  const resolveCalls: Array<{ key: string | undefined; exclude: readonly string[] }> = []
   const failures: Array<{ uid: string; untilMs: number }> = []
   return {
-    resolveKeys,
+    resolveCalls,
     failures,
-    async resolve(sessionKey?: string): Promise<WorkBuddyCredential> {
-      resolveKeys.push(sessionKey)
+    async resolve(sessionKey?: string, options?: { exclude?: readonly string[] }): Promise<WorkBuddyCredential> {
+      // This pool has exactly one account, so the failover attempt asks for a
+      // replacement and gets the same one back — the shim must notice and stop.
+      resolveCalls.push({ key: sessionKey, exclude: options?.exclude ?? [] })
       return CREDENTIAL
     },
     async current() { return CREDENTIAL },
@@ -91,7 +93,12 @@ describe('shim session affinity', () => {
 
     // This is the glue: without it the store never sees the conversation id and
     // every turn rotates to a different account.
-    expect(store.resolveKeys).toEqual(['session-42'])
+    //
+    // Two calls, not one: the account rate-limits, so the shim asks for a
+    // replacement. With a one-account pool it gets the same uid back and stops —
+    // the second entry is the failover attempt, keyed identically.
+    expect(store.resolveCalls.map((call) => call.key)).toEqual(['session-42', 'session-42'])
+    expect(store.resolveCalls[1]?.exclude).toEqual(['uid-a'])
   })
 
   it('passes no key when the header is absent', async () => {
@@ -99,7 +106,7 @@ describe('shim session affinity', () => {
     const { origin, token } = await startShim(store)
 
     await post(origin, token)
-    expect(store.resolveKeys).toEqual([undefined])
+    expect(store.resolveCalls.map((call) => call.key)).toEqual([undefined, undefined])
   })
 
   it('treats the header as an opaque key, verbatim', async () => {
@@ -111,7 +118,7 @@ describe('shim session affinity', () => {
     const { origin, token } = await startShim(store)
 
     await post(origin, token, ['a', 'b'])
-    expect(store.resolveKeys).toEqual(['a,b'])
+    expect(store.resolveCalls[0]?.key).toBe('a,b')
   })
 
   it('parks the failing account so the next turn rotates away from it', async () => {

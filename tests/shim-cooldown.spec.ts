@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest'
 import { cooldownForKind, FAILURE_COOLDOWN_MS } from '../src/shim.ts'
 describe('cooldownForKind', () => {
   it('cools account-shaped failures', () => {
-    for (const kind of ['hard_credit', 'soft_rate', 'server'] as const) {
+    for (const kind of ['hard_credit', 'soft_rate', 'server', 'account_restricted'] as const) {
       expect(cooldownForKind(kind, 1000)).toBe(1000 + FAILURE_COOLDOWN_MS[kind])
     }
   })
@@ -38,6 +38,16 @@ describe('cooldownForKind', () => {
     // durations must differ by an order of magnitude because the causes do.
     expect(FAILURE_COOLDOWN_MS.hard_credit).toBe(60 * 60_000)
     expect(FAILURE_COOLDOWN_MS.hard_credit).toBeGreaterThan(FAILURE_COOLDOWN_MS.soft_rate * 10)
+  })
+
+  it('parks a restricted account between the two extremes', () => {
+    // A restriction is not credit (waiting an hour buys nothing) and not a rate
+    // limit (waiting a minute changes nothing either). Half an hour keeps it out
+    // of rotation without writing it off for good, and a lift upstream is
+    // noticed on the next interval.
+    expect(FAILURE_COOLDOWN_MS.account_restricted).toBe(30 * 60_000)
+    expect(FAILURE_COOLDOWN_MS.account_restricted).toBeGreaterThan(FAILURE_COOLDOWN_MS.soft_rate)
+    expect(FAILURE_COOLDOWN_MS.account_restricted).toBeLessThan(FAILURE_COOLDOWN_MS.hard_credit)
   })
 
   it('keeps a rate limit short, since it clears on its own', () => {

@@ -47,13 +47,22 @@ import { rewriteChannelFingerprints } from './channel-rewrite.ts'
  *   the user can also re-enable or sign in again explicitly.
  * - `soft_rate` means "too fast": the upstream's own limit resets on its own, so
  *   a short park is enough to stop the next request from hitting the same wall.
+ * - `account_restricted` is the upstream refusing to serve this account at all
+ *   (403 / code 11140). It is neither "pay" nor "slow down": the account is
+ *   intact but blocked, and nothing the user can do here clears it. Half an hour
+ *   keeps a restricted account out of rotation long enough to notice, without
+ *   permanently writing it off — a lift on the upstream side is picked up on the
+ *   next interval rather than at the next restart.
  *
  * `server` (5xx) is transient by nature, hence the shortest.
  */
-export const FAILURE_COOLDOWN_MS: Readonly<Record<'hard_credit' | 'soft_rate' | 'server', number>> = {
+export const FAILURE_COOLDOWN_MS: Readonly<
+  Record<'hard_credit' | 'soft_rate' | 'server' | 'account_restricted', number>
+> = {
   hard_credit: 60 * 60_000,
   soft_rate: 60_000,
   server: 10_000,
+  account_restricted: 30 * 60_000,
 }
 
 /**
@@ -62,7 +71,7 @@ export const FAILURE_COOLDOWN_MS: Readonly<Record<'hard_credit' | 'soft_rate' | 
  * are request-shape problems that would fail identically on any account).
  */
 export function cooldownForKind(kind: UpstreamErrorKind, now: number = Date.now()): number | undefined {
-  const ms = kind === 'hard_credit' || kind === 'soft_rate' || kind === 'server'
+  const ms = kind === 'hard_credit' || kind === 'soft_rate' || kind === 'server' || kind === 'account_restricted'
     ? FAILURE_COOLDOWN_MS[kind]
     : undefined
   return ms === undefined ? undefined : now + ms
@@ -80,6 +89,17 @@ export function cooldownForKind(kind: UpstreamErrorKind, now: number = Date.now(
  * {@link clearCooldown} in the sign-in path).
  */
 export const SESSION_DEAD_PARK_MS = 5 * 60_000
+
+/**
+ * How many accounts one request may try.
+ *
+ * Three, matching the size of a typical personal pool: the account that served
+ * last plus two fallbacks. Each extra attempt is a full round trip with the same
+ * 78 KB body, and every account-shaped class already parks the account it
+ * failed on, so a fourth attempt would be looking at a pool that has just been
+ * marked unusable. Exceeding it means the problem is not the account.
+ */
+export const MAX_ACCOUNT_ATTEMPTS = 3
 
 /**
  * How long a channel-check rejection is remembered.
@@ -200,6 +220,7 @@ const KIND_STATUS: Readonly<Record<UpstreamErrorKind, number>> = {
   hard_credit: 402,
   soft_rate: 429,
   session_dead: 401,
+  account_restricted: 403,
   not_found: 502,
   server: 502,
   client: 400,
@@ -378,6 +399,12 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
     // rejection is still remembered, skip straight to the role demotion.
     let outbound = credential.region === 'cn' ? rewriteChannelFingerprints(prepared) : prepared
     if (Date.now() < channelBlockedUntil) outbound = demoteInstructionMessage(outbound)
+    // Accounts already tried by *this* request. A failure that says "this
+    // account cannot serve you" is worth one more attempt on another one, but
+    // never on an account that just failed two lines ago.
+    const attempted: string[] = [credential.uid]
+    const parked = new Set<string>()
+    let sessionParked = false
     let result = await client.chatStream(credential, outbound, controller.signal)
 
     /**
@@ -404,6 +431,7 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
           // Signing in again is the only fix; park the account so the rest of
           // the pool can serve instead of retrying a dead session each turn.
           store.noteFailure(credential.uid, Date.now() + SESSION_DEAD_PARK_MS)
+          sessionParked = true
         }
       } else {
         credential = outcome.credential
@@ -428,6 +456,73 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
         outbound = demoted
         result = await client.chatStream(credential, outbound, controller.signal)
       }
+    }
+
+    /**
+     * Fail the request over to another account when the failure is about the
+     * *account*, not the request.
+     *
+     * Every attempt above sends the same body to the same account. When the
+     * upstream answers "this account is out of credit / rate-limited / broken /
+     * restricted" (403/11140 included), another signed-in account would answer
+     * the same body fine — so failing here would be reporting the pool's
+     * problem as the user's.
+     *
+     * This is safe only because it happens **before** any byte reaches the
+     * caller: a failed attempt produced an error response, never a partial
+     * stream, so the retry is invisible and cannot duplicate output. That is
+     * also why this is not the "retry on another account" rule the README used
+     * to rule out — that one was about re-sending a request whose stream had
+     * already started.
+     *
+     * Bounded at {@link MAX_ACCOUNT_ATTEMPTS} total attempts, and the accounts
+     * already tried are excluded from selection, so a pool of dead accounts
+     * costs a bounded number of round trips rather than a loop.
+     */
+    while (!result.ok) {
+      const kind = result.kind
+      const accountShaped = kind === 'hard_credit'
+        || kind === 'soft_rate'
+        || kind === 'server'
+        || kind === 'account_restricted'
+        // Only after the refresh was refused as well: at that point nothing on
+        // this account can serve, and a plain 401 (one the refresh fixed) never
+        // reaches this loop.
+        || (kind === 'session_dead' && sessionParked)
+      if (!accountShaped || attempted.length >= MAX_ACCOUNT_ATTEMPTS) break
+
+      // Park before looking for a replacement: the next `resolve` must not see
+      // this account as selectable even if the class is one affinity would
+      // otherwise hand back.
+      const until = cooldownForKind(kind)
+      if (until !== undefined) {
+        store.noteFailure(credential.uid, until)
+        parked.add(credential.uid)
+      }
+
+      let next
+      try {
+        // A copy, not the live array: `attempted` grows on the next iteration, and
+        // a store that kept the reference would silently widen its own exclusion.
+        next = await store.resolve(sessionKey, { exclude: [...attempted] })
+      } catch {
+        // No other account can serve. Fall through to the original failure:
+        // "the account was restricted" is a far more useful answer than
+        // "not signed in".
+        break
+      }
+      if (attempted.includes(next.uid)) break
+
+      attempted.push(next.uid)
+      logger?.warn(
+        `dsh-workbuddy-oauth: uid=${credential.uid.slice(0, 8)} ${kind}; `
+        + `failing over to uid=${next.uid.slice(0, 8)} (attempt ${attempted.length}/${MAX_ACCOUNT_ATTEMPTS})`,
+      )
+      credential = next
+      // The replacement's session state is unknown, so the parked flag — which
+      // belongs to the account just abandoned — does not carry over.
+      sessionParked = false
+      result = await client.chatStream(credential, outbound, controller.signal)
     }
 
     // One line per request naming the serving account. This is the only
@@ -473,9 +568,11 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
       // Park the account out of selection when the failure is account-shaped.
       // The next request then rotates to another account instead of hitting the
       // same wall immediately. Request-shape failures (client/not_found) and
-      // session-dead are deliberately not cooled.
+      // session-dead are deliberately not cooled. An account the failover loop
+      // already parked is skipped: the same uid recorded twice would read as two
+      // failures in the store for one upstream answer.
       const until = cooldownForKind(result.kind)
-      if (until !== undefined) store.noteFailure(credential.uid, until)
+      if (until !== undefined && !parked.has(credential.uid)) store.noteFailure(credential.uid, until)
 
       const detail = extractDisplayErrorMessage(result.message)
         // A gateway 401 has no JSON envelope to read a message out of — the body
